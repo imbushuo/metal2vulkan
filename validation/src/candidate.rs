@@ -6667,6 +6667,52 @@ declare { <4 x float>, i8 } @air.sample_texture_cube.v4f32(ptr addrspace(1), ptr
         assert_eq!(output, [0x00, 0x40]);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn half_stage_io_executes_on_candidate() {
+        let ll = include_str!("../fixtures/public/fragment_half_stage_io.ll");
+        let case = crate::case::half_stage_io_test_case(
+            sha256_bytes(ll.as_bytes()),
+            "fragment_half_stage_io".into(),
+        );
+        let reflection = metal2vulkan::reflect_sanitized(
+            ll,
+            metal2vulkan::passes::Stage::Fragment,
+            metal2vulkan::passes::TransformOptions::default(),
+        )
+        .unwrap();
+        let resources = LiteralResources::prepare(&case).unwrap();
+        let scratch = crate::ScratchDir::new("half-stage-io-candidate").unwrap();
+        let spv = metal2vulkan::translate_sanitized_native_with_options(
+            ll,
+            metal2vulkan::passes::Stage::Fragment,
+            scratch.path(),
+            metal2vulkan::passes::TransformOptions::default(),
+        )
+        .unwrap();
+        let companion_ll = scratch.path().join("graphics-companion.ll");
+        std::fs::write(&companion_ll, ll).unwrap();
+        let companion =
+            metal2vulkan::translate_passthrough(companion_ll.to_str().unwrap(), scratch.path())
+                .unwrap();
+        let backend = if cfg!(target_os = "macos") {
+            Backend::Moltenvk
+        } else {
+            Backend::Vulkan
+        };
+        let (output, _) = platform::execute(
+            &case,
+            &resources,
+            &reflection,
+            &spv,
+            Some(&companion),
+            None,
+            backend,
+        )
+        .unwrap();
+        assert_eq!(output, crate::case::half_stage_io_expected_bytes());
+    }
+
     #[test]
     fn tessellation_companion_matches_and_validates_the_reflected_interface() {
         let ll = r#"

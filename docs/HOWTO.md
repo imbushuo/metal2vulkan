@@ -278,6 +278,14 @@ footprint soundness gate. Treat `access: null` conservatively as read-write.
   are arrays and its other listed locations carry patch data.
 - Fragment stages use `varyings`, `render_targets`, `depth_members`, `stencil_members`, and
   `depth_qualifier`.
+- Half scalar/vector attributes, varyings, and color outputs use 32-bit floating-point SPIR-V
+  interfaces. The entry converts to AIR half values before shader arithmetic; the exit widens
+  half values exactly. Interpolation decorations and buffer layouts are unchanged. Generated
+  passthrough and observer stages use the same transport and retain the half-value conversions.
+  `shaderFloat16` and 16-bit buffer storage do not imply `storageInputOutput16`; consumers must
+  independently admit any remaining narrow interfaces against the features they actually enabled.
+  This does not establish bit-exact interpolation across devices: conversions retain the
+  translator's existing floating-point policy, not a new rounding or denormal guarantee.
 - Kernel stages use `local_size`. `imageblock_layouts` and threadgroup bindings describe Workgroup
   storage rather than descriptors.
 - For kernels, obey `kernel_dispatch`. For `ThreadsDynamic` and `ThreadsFixed`, call

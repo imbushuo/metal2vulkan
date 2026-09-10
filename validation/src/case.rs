@@ -365,6 +365,76 @@ pub(crate) fn fragment_imageblock_test_case(air_sha256: String, entry: String) -
     }
 }
 
+#[cfg(test)]
+pub(crate) fn half_stage_io_test_case(air_sha256: String, entry: String) -> AuthoredCase {
+    AuthoredCase {
+        air_sha256,
+        case_id: "test-half-stage-io".into(),
+        name: "portable-half-stage-transport".into(),
+        entry,
+        stage: Stage::Fragment,
+        buffers: vec![],
+        argument_buffer_buffers: vec![],
+        device_buffer_arrays: vec![],
+        threadgroup_memory: vec![],
+        imageblock: None,
+        fragment_imageblock: None,
+        acceleration_structures: vec![],
+        visible_function_references: vec![],
+        visible_function_tables: vec![],
+        intersection_function_tables: vec![],
+        argument_buffer_intersection_function_tables: vec![],
+        textures: vec![],
+        texture_arrays: vec![],
+        argument_buffer_textures: vec![],
+        samplers: vec![],
+        render_targets: vec![RenderTargetResource {
+            index: 0,
+            format: TextureFormat::Rgba32Float,
+            dimensions: [3, 2],
+            initial_bytes_b64: base64::engine::general_purpose::STANDARD.encode([0u8; 3 * 2 * 16]),
+        }],
+        depth_stencil: None,
+        vertex_inputs: vec![],
+        vertex_observation: None,
+        kernel_stage_inputs: vec![],
+        function_constants: vec![],
+        dispatch: None,
+        draw: Some(Draw {
+            primitive: Primitive::Triangle,
+            vertex_start: 0,
+            vertex_count: 3,
+            instance_count: 1,
+        }),
+        tessellation: None,
+        output: OutputSelection::RenderTarget {
+            index: 0,
+            origin: [0, 0],
+            dimensions: [3, 2],
+        },
+        compare: Comparison::Exact,
+        execution_safety: ExecutionSafety::LoopFree,
+        rationale: Some(
+            "Transport a flat half4 varying and half4 color output through float32 stage \
+             storage, using exactly representable half arithmetic and RGBA32Float results."
+                .into(),
+        ),
+        authored_by: Some("copilot".into()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn half_stage_io_expected_bytes() -> Vec<u8> {
+    // Every companion vertex supplies z=0.5 and w=1.0, so flat provoking-vertex
+    // selection cannot change zzww - 0.125. All four output channels are exact
+    // in binary16 and binary32, without an interpolation or rounding-mode premise.
+    [0.375f32, 0.375, 0.875, 0.875]
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect::<Vec<_>>()
+        .repeat(3 * 2)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {

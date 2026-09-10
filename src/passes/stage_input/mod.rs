@@ -77,9 +77,8 @@ pub(in crate::passes) enum ParamBinding {
     /// A scalar fragment bool varying. Vulkan user IO cannot use OpTypeBool, so the interface slot is
     /// a flat uint and the loaded value is compared against zero at function entry.
     LoadVarBoolFromUint { var: Word, bool_ty: Word },
-    /// A scalar builtin Input var (`VertexIndex`/`InstanceIndex`, a 32-bit uint) feeding a NARROWER
-    /// integer param (`ushort [[instance_id]]`, an i16): load the uint then `OpUConvert` it down to the
-    /// param's own width, so the body's 16-bit uses (`OpBitwiseAnd %ushort`) are width-consistent.
+    /// Load the interface representation, then numerically convert to the body's narrower type:
+    /// `OpUConvert` for integer builtins/attributes, `OpFConvert` for half attributes/varyings.
     LoadVarConverted {
         var: Word,
         load_ty: Word,
@@ -1346,6 +1345,15 @@ pub(super) fn build_stage_input(
                 ctx.interface.push(var);
                 if interface_ty == *pty {
                     bindings.push((*pid, ParamBinding::LoadVar { var, ty: *pty }));
+                } else if super::stage_io::float_shape(ctx, *pty).is_some() {
+                    bindings.push((
+                        *pid,
+                        ParamBinding::LoadVarConverted {
+                            var,
+                            load_ty: interface_ty,
+                            param_ty: *pty,
+                        },
+                    ));
                 } else if matches!(stage, Stage::Vertex)
                     && (type_int_shape(&defs, *pty).is_some()
                         || defs.get(pty).is_some_and(|definition| {

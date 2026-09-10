@@ -980,18 +980,69 @@ fragment half4 metal2vulkan_tile_coverage_fragment() { return half4(0.0h); }
         reflection: &metal2vulkan::reflect::ShaderReflection,
         function_tables: &crate::library_module::ResolvedLinkedFunctions,
     ) -> Result<Vec<u8>, String> {
+        let fragment_library = load_library(&context.device, source)?;
+        execute_fragment_with_library(
+            context,
+            case,
+            &source.air_ll,
+            resources,
+            reflection,
+            function_tables,
+            &fragment_library,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn execute_authored_fragment(
+        case: &AuthoredCase,
+        air_ll: &str,
+        authored_msl: &str,
+        resources: &LiteralResources,
+        reflection: &metal2vulkan::reflect::ShaderReflection,
+        function_tables: &crate::library_module::ResolvedLinkedFunctions,
+    ) -> Result<Vec<u8>, String> {
+        crate::executor_contract::require_case(case, "authored Metal fragment executor")?;
+        if case.stage != crate::case::Stage::Fragment {
+            return Err("authored Metal fragment executor requires a fragment case".into());
+        }
+        autoreleasepool(|_| {
+            let context = MetalContext::new()?;
+            let library = context
+                .device
+                .newLibraryWithSource_options_error(&NSString::from_str(authored_msl), None)
+                .map_err(|error| format!("compile authored fragment fixture: {error}"))?;
+            execute_fragment_with_library(
+                &context,
+                case,
+                air_ll,
+                resources,
+                reflection,
+                function_tables,
+                &library,
+            )
+        })
+    }
+
+    fn execute_fragment_with_library(
+        context: &MetalContext,
+        case: &AuthoredCase,
+        air_ll: &str,
+        resources: &LiteralResources,
+        reflection: &metal2vulkan::reflect::ShaderReflection,
+        function_tables: &crate::library_module::ResolvedLinkedFunctions,
+        fragment_library: &ProtocolObject<dyn MTLLibrary>,
+    ) -> Result<Vec<u8>, String> {
         let device = &context.device;
-        let fragment_library = load_library(device, source)?;
         let entry = NSString::from_str(&case.entry);
-        let fragment = make_function(&fragment_library, &entry, resources)?;
+        let fragment = make_function(fragment_library, &entry, resources)?;
         let linked = load_linked_functions(device, function_tables, resources)?;
-        let layered_rendering = metal2vulkan::meta::parse_air_fragment_meta(&source.air_ll)
-            .is_some_and(|meta| {
+        let layered_rendering =
+            metal2vulkan::meta::parse_air_fragment_meta(air_ll).is_some_and(|meta| {
                 meta.roles.iter().any(|(_, role)| {
                     matches!(role, metal2vulkan::meta::FragRole::RenderTargetArrayIndex)
                 })
             });
-        let vertex_source = fragment_passthrough_msl(&source.air_ll)?;
+        let vertex_source = fragment_passthrough_msl(air_ll)?;
         let vertex_library = device
             .newLibraryWithSource_options_error(&NSString::from_str(&vertex_source), None)
             .map_err(|error| format!("compile generated fragment companion: {error}"))?;
@@ -4626,6 +4677,36 @@ entry:
         )
         .unwrap();
         assert_eq!(output, [0x00, 0x40]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn half_stage_io_executes_on_metal() {
+        use crate::library_module::ResolvedLinkedFunctions;
+
+        let air_ll = include_str!("../fixtures/public/fragment_half_stage_io.ll");
+        let authored_msl = include_str!("../fixtures/public/fragment_half_stage_io.metal");
+        let case = crate::case::half_stage_io_test_case(
+            crate::hash::sha256_bytes(air_ll.as_bytes()),
+            "fragment_half_stage_io".into(),
+        );
+        let reflection = metal2vulkan::reflect_sanitized(
+            air_ll,
+            metal2vulkan::passes::Stage::Fragment,
+            metal2vulkan::passes::TransformOptions::default(),
+        )
+        .unwrap();
+        let resources = LiteralResources::prepare(&case).unwrap();
+        let output = platform::execute_authored_fragment(
+            &case,
+            air_ll,
+            authored_msl,
+            &resources,
+            &reflection,
+            &ResolvedLinkedFunctions::default(),
+        )
+        .unwrap();
+        assert_eq!(output, crate::case::half_stage_io_expected_bytes());
     }
 
     #[cfg(target_os = "macos")]

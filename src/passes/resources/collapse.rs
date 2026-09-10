@@ -82,7 +82,6 @@ pub(in crate::passes) fn apply_bindings(
                 load_ty,
                 param_ty,
             } => {
-                // load the 32-bit builtin, then UConvert down to the narrower param int type.
                 let lid = ctx.module.fresh_id();
                 loads.push(Instruction::new(
                     Op::Load,
@@ -92,7 +91,11 @@ pub(in crate::passes) fn apply_bindings(
                 ));
                 let cid = ctx.module.fresh_id();
                 loads.push(Instruction::new(
-                    Op::UConvert,
+                    if super::super::stage_io::float_shape(ctx, param_ty).is_some() {
+                        Op::FConvert
+                    } else {
+                        Op::UConvert
+                    },
                     Some(param_ty),
                     Some(cid),
                     vec![Operand::IdRef(lid)],

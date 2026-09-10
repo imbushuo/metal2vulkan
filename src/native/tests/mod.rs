@@ -13,6 +13,7 @@ mod control_flow;
 mod interface;
 mod intrinsics;
 mod misc;
+mod stage_io;
 mod textures;
 mod threadgroup;
 mod types;

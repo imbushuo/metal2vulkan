@@ -1537,6 +1537,7 @@ mod prune;
 mod resources;
 mod spirv_cfg;
 mod stage_input;
+mod stage_io;
 mod stage_output;
 mod type_singletons;
 mod value_queries;

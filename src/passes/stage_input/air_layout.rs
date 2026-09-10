@@ -78,6 +78,10 @@ pub(in crate::passes) fn fragment_varying_interface_type(
     ty: Word,
     defs: &HashMap<Word, Instruction>,
 ) -> Word {
+    let interface_ty = super::super::stage_io::float_interface_type(ctx, ty);
+    if interface_ty != ty {
+        return interface_ty;
+    }
     let Some(name) = frag.and_then(|meta| meta.varying_type(loc)) else {
         return ty;
     };
@@ -97,6 +101,10 @@ pub(in crate::passes) fn vertex_attribute_interface_type(
     ty: Word,
     defs: &HashMap<Word, Instruction>,
 ) -> Word {
+    let interface_ty = super::super::stage_io::float_interface_type(ctx, ty);
+    if interface_ty != ty {
+        return interface_ty;
+    }
     let Some(name) = vert.and_then(|meta| meta.vertex_input_type(loc)) else {
         return ty;
     };

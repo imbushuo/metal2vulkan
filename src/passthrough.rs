@@ -48,6 +48,18 @@ fn passthrough_type(air: &str) -> Result<PassTy, String> {
 }
 
 impl PassTy {
+    fn interface_spirv(&self) -> String {
+        if self.base == "half" {
+            if self.lanes == 1 {
+                "float".into()
+            } else {
+                format!("v{}float", self.lanes)
+            }
+        } else {
+            self.spirv.clone()
+        }
+    }
+
     fn needs_flat(&self) -> bool {
         matches!(self.base, "bool" | "int" | "uint" | "short" | "ushort")
     }
@@ -148,7 +160,7 @@ fn passthrough_vertex_spvasm(
         out_types.insert("uint".to_string());
     }
     for (_, ty) in &varyings {
-        out_types.insert(ty.spirv.clone());
+        out_types.insert(ty.interface_spirv());
     }
     let has_half = varyings.iter().any(|(_, ty)| ty.base == "half");
     let has_int16 = varyings.iter().any(|(_, ty)| ty.is_int16());
@@ -260,7 +272,7 @@ fn passthrough_vertex_spvasm(
     for (i, (_, ty)) in varyings.iter().enumerate() {
         p.push(format!(
             "%vout{i} = OpVariable %_ptr_Output_{} Output",
-            ty.spirv
+            ty.interface_spirv()
         ));
     }
 
@@ -293,7 +305,12 @@ fn passthrough_vertex_spvasm(
                 let fval = emit_float_value(&mut p, "uvf", i, ty.lanes, distinct_float3_inputs)?;
                 let hval = format!("%uvh{i}");
                 p.push(format!("{hval} = OpFConvert %{} {fval}", ty.spirv));
-                hval
+                let transported = format!("%uvtransport{i}");
+                p.push(format!(
+                    "{transported} = OpFConvert %{} {hval}",
+                    ty.interface_spirv()
+                ));
+                transported
             }
             "bool" => "%uint_1".to_string(),
             "int" | "uint" | "short" | "ushort" => emit_integer_value(&mut p, "uvi", i, ty),
@@ -450,7 +467,7 @@ fn vertex_observer_fragment_spvasm(
     }
     p.push(format!(
         "%_ptr_Input_value = OpTypePointer Input %{}",
-        ty.spirv
+        ty.interface_spirv()
     ));
     p.push(format!(
         "%_ptr_Output_color = OpTypePointer Output %{output_ty}"
@@ -465,7 +482,7 @@ fn vertex_observer_fragment_spvasm(
     p.push("%color = OpVariable %_ptr_Output_color Output".into());
     p.push("%main = OpFunction %void None %fnty".into());
     p.push("%entry = OpLabel".into());
-    p.push(format!("%loaded = OpLoad %{} %vin", ty.spirv));
+    p.push(format!("%loaded = OpLoad %{} %vin", ty.interface_spirv()));
     let converted = match ty.base {
         "half" => {
             let destination = if ty.lanes == 1 {
@@ -473,7 +490,8 @@ fn vertex_observer_fragment_spvasm(
             } else {
                 format!("%v{}float", ty.lanes)
             };
-            p.push(format!("%converted = OpFConvert {destination} %loaded"));
+            p.push(format!("%narrowed = OpFConvert %{} %loaded", ty.spirv));
+            p.push(format!("%converted = OpFConvert {destination} %narrowed"));
             "%converted"
         }
         "short" | "ushort" => {
@@ -559,6 +577,57 @@ fn fragment_requires_distinct_float3_inputs(ll: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn half_companions_match_float_transport_and_preserve_half_rounding() {
+        let directory = std::env::temp_dir().join(format!(
+            "metal2vulkan-half-companions-{}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        for lanes in 1..=4 {
+            let air = if lanes == 1 {
+                "half".into()
+            } else {
+                format!("half{lanes}")
+            };
+            let body = if lanes == 1 {
+                "half".into()
+            } else {
+                format!("v{lanes}half")
+            };
+            let interface = if lanes == 1 {
+                "float".into()
+            } else {
+                format!("v{lanes}float")
+            };
+            let mut frag = meta::FragMeta::default();
+            frag.roles.push((0, meta::FragRole::Varying(0)));
+            frag.varying_types.insert(0, air.clone());
+            let vertex = passthrough_vertex_spvasm(&frag, false).unwrap();
+            assert!(vertex.contains(&format!(
+                "%_ptr_Output_{interface} = OpTypePointer Output %{interface}"
+            )));
+            assert!(!vertex.contains(&format!("OpTypePointer Output %{body}")));
+            assert!(vertex.contains(&format!("%uvh0 = OpFConvert %{body}")));
+            assert!(vertex.contains(&format!("%uvtransport0 = OpFConvert %{interface} %uvh0")));
+
+            let mut vert = meta::VertMeta::default();
+            vert.output_roles.push(meta::VertOutRole::Varying(0));
+            vert.output_varying_types.insert(0, air);
+            let fragment = vertex_observer_fragment_spvasm(&vert, Some(0)).unwrap();
+            assert!(fragment.contains(&format!(
+                "%_ptr_Input_value = OpTypePointer Input %{interface}"
+            )));
+            assert!(fragment.contains(&format!("%narrowed = OpFConvert %{body} %loaded")));
+            assert!(fragment.contains(&format!("%converted = OpFConvert %{interface} %narrowed")));
+            for asm in [&vertex, &fragment] {
+                let bytes = assemble_spvasm(asm, &directory, "half-companion").unwrap();
+                tools::spirv_val_bytes(&bytes, &directory).unwrap();
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn passthrough_vertex_flips_clip_y_for_vulkan_viewport() {

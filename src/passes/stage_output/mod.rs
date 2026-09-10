@@ -51,7 +51,7 @@ fn user_location_output_type(ctx: &mut Ctx, ty: Word) -> Word {
     if type_def_of(ctx, ty).is_some_and(|definition| definition.class.opcode == Op::TypeBool) {
         ctx.ty_uint()
     } else {
-        ty
+        super::stage_io::float_interface_type(ctx, ty)
     }
 }
 
@@ -150,6 +150,21 @@ fn value_for_store(
 ) -> Word {
     if src_ty == dst_ty {
         return value;
+    }
+    if let (Some((src_bits, src_lanes)), Some((dst_bits, dst_lanes))) = (
+        super::stage_io::float_shape(ctx, src_ty),
+        super::stage_io::float_shape(ctx, dst_ty),
+    ) {
+        if src_bits != dst_bits && src_lanes == dst_lanes {
+            let converted = ctx.module.fresh_id();
+            stores.push(Instruction::new(
+                Op::FConvert,
+                Some(dst_ty),
+                Some(converted),
+                vec![Operand::IdRef(value)],
+            ));
+            return converted;
+        }
     }
     if let (Some((src_bits, _)), Some((dst_bits, dst_signed))) = (
         int_component_shape_live(ctx, src_ty),
