@@ -366,6 +366,7 @@ struct Ctx {
     runtime_storage_image_values: HashMap<Word, (u32, RuntimeStorageImageState)>,
     /// Metal texture indices whose storage-image binding consumed its specialization entry.
     applied_runtime_storage_image_indices: HashSet<u32>,
+    texture_write_rounding: crate::texture_write_rounding::WriteRoundingLowering,
     /// lazily-created default sampler variable id, for `air.get_read_sampler()` (a sampler-less
     /// `texture.read` still passes a sampler operand AIR-side; we synthesize one valid sampler).
     default_sampler_var: Option<Word>,
@@ -391,8 +392,9 @@ struct Ctx {
     /// Custom fragment-imageblock master member -> storage-image variable/type. Unlike implicit
     /// attachment imageblocks these slots are selected by master-field ordinal.
     fragment_imageblock_vars: HashMap<u32, (Word, Word)>,
-    /// The custom fragment imageblock contract requires ordered per-pixel access.
-    uses_fragment_imageblock: bool,
+    /// Raster-order textures and custom fragment imageblocks require ordered
+    /// per-pixel access.
+    uses_pixel_interlock: bool,
     fragment_imageblock_coord_var: Option<Word>,
     /// Fragment output rewrite created a `BuiltIn FragDepth` Output variable.
     writes_frag_depth: bool,
@@ -459,6 +461,7 @@ impl Ctx {
             runtime_storage_image_states: options.runtime_storage_image_states,
             runtime_storage_image_values: HashMap::new(),
             applied_runtime_storage_image_indices: HashSet::new(),
+            texture_write_rounding: crate::texture_write_rounding::WriteRoundingLowering::default(),
             default_sampler_var: None,
             sampler_states: HashMap::new(),
             specialized_runtime_sampler_values: HashSet::new(),
@@ -467,7 +470,7 @@ impl Ctx {
             placeholder_descriptor_vars: HashMap::new(),
             implicit_imageblock_vars: HashMap::new(),
             fragment_imageblock_vars: HashMap::new(),
-            uses_fragment_imageblock: false,
+            uses_pixel_interlock: false,
             fragment_imageblock_coord_var: None,
             writes_frag_depth: false,
         }
@@ -2682,6 +2685,7 @@ pub(crate) fn transform_with_options_and_sidecar(
     // the collection that would otherwise root a stranded variable at its own interface entry.
     module_cleanup::drop_unreferenced_global_variables(&mut ctx.module);
     module_cleanup::gc_dead_globals(&mut ctx);
+    crate::texture_write_rounding::initialize_declared_write_formats(&mut ctx.module)?;
     debug_phase!("complete");
 
     let placeholder_descriptor_bindings = surviving_placeholder_bindings(&ctx);

@@ -1302,6 +1302,13 @@ pub(in crate::passes) fn lower_imageblock_slice_write_texel(
         region_gate.empty,
         &mut out,
     )?;
+    let texel32 = if comp == ImageComp::Float {
+        ctx.module.types_global_values.append(&mut ctx.new_globals);
+        ctx.phase_type_positions = None;
+        ctx.texture_write_rounding.preserve_imageblock_slice(
+            &mut ctx.module, &mut out, texel32, texel32_ty,
+        )?
+    } else { texel32 };
     out.push(Instruction::new(
         Op::ImageWrite,
         None,

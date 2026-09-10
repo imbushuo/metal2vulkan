@@ -137,6 +137,23 @@ impl Emitter {
                         };
                     }
                 }
+            } else if inst.opcode == "fptoui" {
+                if let (Some(operands), Some(result_ty)) =
+                    (self.tir_inst_typed_operands(inst), inst.result_ty.as_ref())
+                {
+                    if let [source] = operands.as_slice() {
+                        let destination = self.resolve_type(result_ty)?;
+                        let source_id = self.value_id(&source.value, &source.ty)?;
+                        let result_type = self.type_id(&destination)?;
+                        let result = self.result_id(name, &destination)?;
+                        instructions.push(Self::inst(
+                            Op::ConvertFToU, Some(result_type), Some(result),
+                            vec![Operand::IdRef(source_id)],
+                        ));
+                        self.values.insert(name.clone(), (result, destination));
+                        return Ok(());
+                    }
+                }
             } else if inst.opcode == "select" {
                 if let Some(operands) = self.tir_inst_typed_operands(inst) {
                     if let [cond, t, f] = operands.as_slice() {

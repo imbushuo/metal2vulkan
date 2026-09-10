@@ -18,6 +18,68 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 #[test]
+fn native_half_float32_bit_literals_preserve_special_values_and_round_finite_values() {
+    for (source, expected) in [
+        (0x7fc0_0000u32, 0x7e00),
+        (0x7f80_0000, 0x7c00),
+        (0xff80_0000, 0xfc00),
+        (0x8000_0000, 0x8000),
+        (0x3f80_1000, 0x3c00),
+        (0x3f80_3000, 0x3c02),
+    ] {
+        let ll = format!(
+            "target triple = \"spirv-unknown-vulkan1.2\"\n\
+             define <2 x half> @main() {{\n\
+             entry:\n\
+               ret <2 x half> <half f0x{source:08x}, half f0x{source:08x}>\n\
+             }}\n"
+        );
+        let bytes = emit_vulkan_spirv(&ll).expect("emit authored half literals");
+        let module = load_bytes(&bytes).expect("load SPIR-V");
+        let half_ty = module.types_global_values.iter().find_map(|inst| {
+            (inst.class.opcode == Op::TypeFloat
+                && inst.operands == [Operand::LiteralBit32(16)])
+                .then_some(inst.result_id).flatten()
+        }).expect("half type");
+        assert!(module.types_global_values.iter().any(|inst| {
+            inst.class.opcode == Op::Constant
+                && inst.result_type == Some(half_ty)
+                && inst.operands == [Operand::LiteralBit32(expected)]
+        }), "half f0x{source:08x} must become {expected:04x}");
+    }
+    let bad = "define i32 @main() {\nentry:\nret i32 f0x7fc00000\n}\n";
+    assert!(emit_vulkan_spirv(bad).is_err(), "bit literals must remain type checked");
+}
+
+#[test]
+fn native_half_special_literals_translate_in_vertex_and_fragment_stages() {
+    let scratch = std::env::temp_dir().join("m2v-authored-half-special-stages");
+    std::fs::create_dir_all(&scratch).unwrap();
+    for (stage, metadata, output) in [
+        (Stage::Vertex, "vertex", r#"!{!"air.position", !"air.arg_type_name", !"float4"}"#),
+        (Stage::Fragment, "fragment", r#"!{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}"#),
+    ] {
+        let source = format!(r#"
+target triple = "spirv-unknown-vulkan1.2"
+define <4 x float> @special_values() {{
+entry:
+  %value = fpext <4 x half> <half f0x7fc00000, half f0x7f800000, half f0xff800000, half f0x80000000> to <4 x float>
+  ret <4 x float> %value
+}}
+!air.{metadata} = !{{!0}}
+!0 = !{{ptr @special_values, !1, !3}}
+!1 = !{{!2}}
+!2 = {output}
+!3 = !{{}}
+"#);
+        let bytes = crate::translate_sanitized_native(&source, stage, &scratch)
+            .expect("authored graphics half-special translation");
+        tools::spirv_val_bytes(&bytes, &scratch).expect("validated graphics stage");
+    }
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn native_typed_numeric_zero_materializes_float_zero() {
     let ll = r#"
 target triple = "spirv-unknown-vulkan1.2"

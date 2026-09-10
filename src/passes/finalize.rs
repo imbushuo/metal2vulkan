@@ -178,7 +178,7 @@ pub(in crate::passes) fn finalize(
                 ],
             ));
         }
-        if ctx.uses_fragment_imageblock {
+        if ctx.uses_pixel_interlock {
             let capability = spirv::Capability::FragmentShaderPixelInterlockEXT;
             if !ctx.module.capabilities.iter().any(|instruction| {
                 instruction.operands.as_slice() == [Operand::Capability(capability)]

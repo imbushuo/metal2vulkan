@@ -15,6 +15,16 @@ options.
 
 For an end-to-end integration recipe, start with [How to translate and integrate a shader](HOWTO.md).
 
+### Raster-ordered graphics textures
+
+Writable vertex and fragment textures use storage-image descriptors, not sampled-image
+descriptors. Fragment texture arguments carrying `air.raster_order_group` execute inside an
+ordered pixel interlock, including void-returning functions whose only output is a texture
+write. The emitted module requires `VK_EXT_fragment_shader_interlock` and the
+`fragmentShaderPixelInterlock` feature; consumers must enable it or refuse the shader.
+The interlock encloses framebuffer-fetch loads as well as texture stores. Independent Metal
+groups conservatively share the same critical section.
+
 ## Getting reflection
 
 ### Library

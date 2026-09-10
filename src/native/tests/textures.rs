@@ -4006,7 +4006,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+    assert_no_pointer_function_parameters(&spv);
     if std::process::Command::new("spirv-val")
         .arg("--version")
         .output()
@@ -4628,7 +4628,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.v4f16(ptr addrspace(1), p
     assert!(asm.contains("Rgba16f"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("air.imageblock"), "{asm}");
-    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+    assert_only_imageblock_identity_calls(&spv);
     let missing_formatless = crate::translate_sanitized_native_with_options(
         ll,
         Stage::Kernel,
@@ -4938,7 +4938,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4f16(ptr addrspace(1
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("air.imageblock"), "{asm}");
-    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+    assert_only_imageblock_identity_calls(&spv);
     if std::process::Command::new("spirv-val")
         .arg("--version")
         .output()
@@ -5098,7 +5098,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4f32(ptr addrspace(1
     );
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("air.get_imageblock"), "{asm}");
-    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+    assert_only_imageblock_identity_calls(&spv);
     if std::process::Command::new("spirv-val")
         .arg("--version")
         .output()
@@ -5530,7 +5530,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
         "{asm}"
     );
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+    assert_no_pointer_function_parameters(&spv);
     if std::process::Command::new("spirv-val")
         .arg("--version")
         .output()
@@ -5603,7 +5603,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
         "{asm}"
     );
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+    assert_no_pointer_function_parameters(&spv);
     if std::process::Command::new("spirv-val")
         .arg("--version")
         .output()

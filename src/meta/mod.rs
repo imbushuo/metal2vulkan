@@ -172,6 +172,10 @@ pub struct FragMeta {
     /// body, so none of its buffer, texture or imageblock stores happen; under the default late
     /// test the same shader performs every store and only its color output is discarded.
     pub early_fragment_tests: bool,
+    /// A texture argument belongs to a Metal raster-order group. Ordering the
+    /// complete body with a per-pixel interlock is a conservative implementation
+    /// even when independent resources name different groups.
+    pub raster_ordered_textures: bool,
     /// Descriptor-backed render-target planes used by implicit imageblock load/store intrinsics.
     /// Detected from the module's intrinsic calls, which is a property of the body rather than of
     /// the stage — the interface pass materializes the plane wherever it lowers one of those calls,
@@ -2193,6 +2197,7 @@ fn parse_air_fragment_meta_with_nodes(
     let mut buffer_type_names = HashMap::new();
     let mut buffer_accesses = HashMap::new();
     let mut indirect_buffer_struct_refs: Vec<(u32, u32, u32)> = Vec::new();
+    let mut raster_ordered_textures = false;
     // AIR function-param pointer address spaces for the fragment entry, the fallback the kernel
     // parser uses when a buffer arg node omits `air.address_space`.
     let param_address_spaces = entry
@@ -2257,6 +2262,7 @@ fn parse_air_fragment_meta_with_nodes(
                 FragRole::Varying(l)
             }
             "texture" if location_index_with_static(node, idx, &static_int_globals) != u32::MAX => {
+                raster_ordered_textures |= i32_after_marker(node, "air.raster_order_group").is_some();
                 if let Some(name) = arg_type_name(node) {
                     texture_type_names.insert(idx, name);
                 }
@@ -2328,6 +2334,7 @@ fn parse_air_fragment_meta_with_nodes(
         .collect::<Vec<_>>();
     Some(FragMeta {
         roles,
+        raster_ordered_textures,
         unmodelled_stage_attributes,
         early_fragment_tests,
         unmodelled_input_params,

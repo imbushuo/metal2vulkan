@@ -38,6 +38,7 @@ mod spirv_module;
 mod spirv_operand;
 mod spirv_variable_ptr;
 pub mod tools;
+pub mod texture_write_rounding;
 pub(crate) mod types;
 
 pub use fc_specialize::{

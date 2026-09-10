@@ -390,6 +390,22 @@ pub(in crate::passes) fn rewrite_return(
     // Find every OpReturnValue. Loop-budgeted validation candidates can add guarded early exits, so
     // the entry may have more than one return-value terminator.
     let mut ret_locs: Vec<(usize, usize, Word)> = Vec::new(); // (block, inst, value id)
+    if ctx.uses_pixel_interlock {
+        // Void fragment entries (texture-write-only draws) still owe an end.
+        // Discard exits owe it too; returning a color is not the lifetime.
+        for block in &mut ctx.module.functions[entry_idx].blocks {
+            let mut index = 0;
+            while index < block.instructions.len() {
+                if matches!(block.instructions[index].class.opcode, Op::Return | Op::Kill) {
+                    block.instructions.insert(index, Instruction::new(
+                        Op::EndInvocationInterlockEXT, None, None, vec![],
+                    ));
+                    index += 1;
+                }
+                index += 1;
+            }
+        }
+    }
     for (bi, blk) in ctx.module.functions[entry_idx].blocks.iter().enumerate() {
         for (ii, inst) in blk.instructions.iter().enumerate() {
             if inst.class.opcode == Op::ReturnValue {
@@ -400,12 +416,6 @@ pub(in crate::passes) fn rewrite_return(
         }
     }
     if ret_locs.is_empty() {
-        if ctx.uses_fragment_imageblock {
-            return Err(
-                "fragment imageblock entry has no value return at which to end pixel interlock"
-                    .to_string(),
-            );
-        }
         // void return (e.g. a discard-only shader): nothing to do.
         return Ok(());
     }
@@ -951,7 +961,7 @@ pub(in crate::passes) fn rewrite_return(
         for output in &outputs {
             replacement.extend(output.stores(ctx, retval));
         }
-        if ctx.uses_fragment_imageblock {
+        if ctx.uses_pixel_interlock {
             replacement.push(Instruction::new(
                 Op::EndInvocationInterlockEXT,
                 None,

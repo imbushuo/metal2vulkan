@@ -64,6 +64,62 @@ Do not use either option as a workaround for an unrelated translation failure.
 
 ## 3. Translate from Rust
 
+### Runtime texture-write rounding
+
+`texture_write_rounding::specialize_texture_write_rounding` specializes a translated module after
+its storage-image types have been matched to the actual bound views. Cache the result by the
+original module, source-native rounding policy, and runtime image formats; a generic AIR `texture2d<float>` does
+not identify the destination's component width.
+
+AIR `.rte` and `.rtz` write intrinsics select per-operation rounding. The mode is preserved in
+executable helper arithmetic, not inferred from function names after translation or stored in
+strippable debug records. The API's `mode` selects the **source device's native policy** for
+unqualified AIR writes; it is not a pipeline descriptor override. Consumers must select an
+**emulated source-device contract**, not infer this policy from the physical host GPU, host
+Metal, MoltenVK, or the guest OS version. Apple M2 native measurements provide reference
+evidence for the RTZ source profile used by `reims-vgpu`; they do not qualify every source
+device, OS/compiler combination, or descriptor-cache ordering. Other source profiles need
+independent native calibration and an explicit policy in executable/cache identity. Cold-first
+and mismatched compiler/descriptor controls must establish precedence without warm PSO reuse.
+
+The helpers explicitly quantize binary16 destinations using 32-bit integer operations.
+This preserves signed zero, subnormal values, overflow
+direction, and NaN/Inf classes without requiring `shaderFloat16` or optional float-control modes.
+Binary32 and integer destinations need no narrowing. Normalized integer destinations are outside
+the floating-point-pixel scope of MSL §1.6.7 and keep their ordinary image conversion. `Default`
+retains the target's native conversion only for unqualified writes; explicit AIR modes remain
+explicit. It does not assert that source and target devices have the same native default.
+Thus `Default` is a deliberately unqualified pass-through path for standalone consumers,
+not a source-parity fallback. The emulating Vulkan runtime passes its explicit source policy
+instead. Formatless descriptor arrays require a consistent component encoding across the
+binding; conflicting runtime facts are refused rather than choosing one array element's policy.
+
+Imageblock stores and imageblock-slice writes are separate producers: they do not acquire an
+AIR texture-write rounding contract merely because they also lower to `OpImageWrite`. Their
+existing declared-format conversion remains unchanged under `Default`. Slice writes also carry
+an executable identity wrapper that preserves their existing conversion under every source
+policy, including when their source is a private cell with no reflected imageblock interface.
+This does not assert a new native-imageblock rounding contract: the existing store conversion
+remains the owner's responsibility. Requesting a nondefault source policy for a genuinely
+unmarked binary16 write still produces a typed refusal, not a blanket bypass.
+
+In `reims-vgpu`, existing stage-interface admission refuses reflected kernel, implicit-fragment,
+and custom-fragment imageblocks before either runtime rounding callsite; that gate alone does
+not exclude metadata-free private-cell slice writes. Ordinary render-target outputs, including
+memoryless attachments, use color-output stores rather than these image writes. Admitting
+additional imageblock interfaces in the future requires their own conversion ownership.
+
+The executable specialization ABI reserves SpecId 3 for source-native policy and SpecIds 16+
+for per-write destination precision. Local-size SpecIds 0..2 remain unchanged. Apply format
+specialization before optimizing/freezing these constants; changing only `OpTypeImage` is not
+sufficient. The final translator initializes selectors for its declared image formats; a consumer
+which retargets images must update them through this API, including for descriptor `Default`.
+
+Formatless images require `TextureWriteTarget` facts identifying their numeric encoding. Missing
+facts, conflicting formats on a shared formatless image type, and unsupported packed floating-point
+formats return an error. Host storage-image and formatless access capabilities remain the
+consumer's responsibility. Descriptor accesses and reflection binding numbers are unchanged.
+
 Use `translate_reflected` for an `.air`/`.ll` path and
 `translate_sanitized_native_reflected` when sanitized LLVM IR is already in memory. All translation
 entry points require caller-owned scratch space. Give concurrent calls different directories and

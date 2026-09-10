@@ -772,6 +772,12 @@ pub(super) fn build_stage_input(
                     runtime_specialization,
                 },
             ));
+            if wtex_dims.contains_key(pid) && frag.is_some_and(|meta| meta.raster_ordered_textures) {
+                ctx.module.annotations.push(Instruction::new(
+                    Op::Decorate, None, None,
+                    vec![Operand::IdRef(var), Operand::Decoration(Decoration::Coherent)],
+                ));
+            }
         } else if role_is("texture") && wtex_dims.contains_key(pid) {
             // Write-only texture -> storage image (Sampled=2 + ImageFormat), lowered via OpImageWrite.
             let (dim, arrayed, fmt, comp) = wtex_dims
@@ -793,6 +799,12 @@ pub(super) fn build_stage_input(
             ));
             let binding = required_resource_binding(*pid, storage_resource_binding)?;
             decorate_binding(&mut ctx.module, var, descriptor_layout.set, binding);
+            if frag.is_some_and(|meta| meta.raster_ordered_textures) {
+                ctx.module.annotations.push(Instruction::new(
+                    Op::Decorate, None, None,
+                    vec![Operand::IdRef(var), Operand::Decoration(Decoration::Coherent)],
+                ));
+            }
             ctx.interface_buffer_var(var);
             bindings.push((
                 *pid,
@@ -2118,11 +2130,10 @@ pub(super) fn build_stage_input(
 
     // Apply param bindings to the body: drop params, then splice replacements.
     apply_bindings(ctx, entry_idx, bindings, &buffer_structs, &all_defs)?;
-    if frag
-        .and_then(|meta| meta.fragment_imageblock.as_ref())
-        .is_some()
-    {
-        ctx.uses_fragment_imageblock = true;
+    if frag.is_some_and(|meta| {
+        meta.fragment_imageblock.is_some() || meta.raster_ordered_textures
+    }) {
+        ctx.uses_pixel_interlock = true;
         ctx.fragment_imageblock_coord_var = fragcoord_var;
         let block = ctx.module.functions[entry_idx]
             .blocks

@@ -108,6 +108,12 @@ pub(in crate::passes) fn lower_write(
     };
 
     let texel32 = preserve_defined_texel_lanes(ctx, &mut out, img, coord32, texel, texel32)?;
+    let texel32 = if comp == crate::passes::ImageComp::Float {
+        let mode = crate::texture_write_rounding::AirWriteRounding::from_intrinsic(name)?;
+        ctx.module.types_global_values.append(&mut ctx.new_globals);
+        ctx.phase_type_positions = None;
+        ctx.texture_write_rounding.wrap(&mut ctx.module, &mut out, mode, texel32, v4)?
+    } else { texel32 };
 
     out.push(Instruction::new(
         Op::ImageWrite,

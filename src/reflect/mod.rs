@@ -87,7 +87,10 @@ mod footprint;
 /// v41 stops reporting a constexpr sampler the finished module does not bind. A state no sample
 /// reads leaves a variable nothing references, which the module drops; reflection still asked a
 /// consumer to create a `VkSampler` there. 112 such bindings in 60 of the 2880-source sample.
-pub const REFLECTION_VERSION: u32 = 41;
+/// v42 preserves per-write AIR texture rounding in executable helpers. Retargeting storage-image
+/// formats also requires the texture-write specialization API; SpecIds 3 and 16+ belong to that
+/// runtime contract, while local-size SpecIds 0..2 and descriptor binding numbers are unchanged.
+pub const REFLECTION_VERSION: u32 = 42;
 
 /// Size in bytes of the twelve tightly packed `u32` values used by exact-thread dispatches: thread
 /// grid, thread base, threadgroup base, and total threadgroup grid (three dimensions each).

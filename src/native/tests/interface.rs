@@ -16,6 +16,49 @@ use crate::{disassemble, meta, tools};
 use spirv::{BuiltIn, Capability, Decoration, Op, Scope, SelectionControl, StorageClass, Word};
 use std::collections::{HashMap, HashSet};
 
+#[test]
+fn graphics_storage_void_fragment_orders_texture_writes_and_framebuffer_fetch() {
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+define void @save(<4 x float> %position, <4 x half> %destination, ptr addrspace(1) %texture) {
+entry:
+  %xy = shufflevector <4 x float> %position, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %coord = fptoui <2 x float> %xy to <2 x i32>
+  call void @air.write_texture_2d.v4f16(ptr addrspace(1) %texture, <2 x i32> %coord, <4 x half> %destination, i32 0, i32 2)
+  ret void
+}
+declare void @air.write_texture_2d.v4f16(ptr addrspace(1), <2 x i32>, <4 x half>, i32, i32)
+!air.fragment = !{!0}
+!0 = !{ptr @save, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !"air.position", !"air.arg_type_name", !"float4"}
+!4 = !{i32 1, !"air.render_target", i32 0, !"air.arg_type_name", !"half4"}
+!5 = !{i32 2, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.write", !"air.raster_order_group", i32 0, !"air.arg_type_name", !"texture2d<half, write>"}
+"#;
+    let directory = std::path::Path::new("target/graphics-storage-translation");
+    std::fs::create_dir_all(directory).unwrap();
+    for ordered in [true, false] {
+        let source = if ordered { ll.to_owned() } else {
+            ll.replace("!\"air.raster_order_group\", i32 0, ", "")
+        };
+        let bytes = crate::translate_sanitized_native(&source, Stage::Fragment, directory)
+            .expect("texture-only fragment translates");
+        let asm = disassemble(&bytes).unwrap();
+        assert!(asm.contains("OpImageWrite"), "{asm}");
+        assert!(asm.contains("SubpassData"), "{asm}");
+        assert!(asm.contains("OpImageRead"), "{asm}");
+        assert_eq!(asm.contains("PixelInterlockOrderedEXT"), ordered, "{asm}");
+        assert_eq!(asm.contains("Coherent"), ordered, "{asm}");
+        assert_eq!(asm.matches("OpBeginInvocationInterlockEXT").count(), usize::from(ordered), "{asm}");
+        assert_eq!(asm.matches("OpEndInvocationInterlockEXT").count(), usize::from(ordered), "{asm}");
+        if std::process::Command::new("spirv-val").arg("--version").output().is_ok() {
+            tools::spirv_val_bytes(&bytes, directory).expect("valid ordered storage fragment");
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 fn shifted_descriptor_layout(set: u32, shift: u32) -> crate::reflect::DescriptorLayout {
     let shift_range =
         |range: crate::reflect::DescriptorBindingRange| crate::reflect::DescriptorBindingRange {
