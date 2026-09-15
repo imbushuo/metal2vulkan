@@ -18,6 +18,8 @@ struct OrdinaryLeaf {
 pub(in crate::native) struct TypedInlineStats {
     pub(in crate::native) splices: usize,
     pub(in crate::native) helper_instances: usize,
+    #[cfg(test)]
+    pub(in crate::native) rewritten_blocks: usize,
 }
 
 fn is_call_opcode(opcode: &str) -> bool {
@@ -422,6 +424,7 @@ impl LlModule {
             if !reachable.contains(&caller_name) {
                 continue;
             }
+            let mut result_substitutions = HashMap::new();
             let mut block_index = 0usize;
             while block_index < self.functions[function_index].blocks.len() {
                 let mut instruction_index = 0usize;
@@ -453,6 +456,11 @@ impl LlModule {
                                 .iter()
                                 .zip(&call.args)
                                 .map(|((parameter, expected_type), argument)| {
+                                    let mut argument = argument.clone();
+                                    crate::native::tir::substitute_typed_value(
+                                        &mut argument,
+                                        &result_substitutions,
+                                    );
                                     if &argument.ty == expected_type
                                         && (matches!(argument.value, LlValue::Local(_))
                                             || matches!(argument.value, LlValue::Gep(_))
@@ -477,7 +485,7 @@ impl LlModule {
                                                 return None;
                                             }
                                         }
-                                        Some(argument.clone())
+                                        Some(argument)
                                     } else {
                                         None
                                     }
@@ -571,7 +579,7 @@ impl LlModule {
                     };
                     let result_substitution = match (call_result, returned) {
                         (None, None) => None,
-                        (Some(result), Some(returned)) => Some(HashMap::from([(result, returned)])),
+                        (Some(result), Some(returned)) => Some((result, returned)),
                         _ => {
                             instruction_index += 1;
                             continue;
@@ -596,12 +604,8 @@ impl LlModule {
                         .expect("call site came from a typed block")
                         .insts
                         .splice(instruction_index..=instruction_index, replacement);
-                    if let Some(result_substitution) = &result_substitution {
-                        for caller_block in &mut self.functions[function_index].blocks {
-                            if let Some(typed) = caller_block.typed_mut() {
-                                typed.substitute_values(result_substitution);
-                            }
-                        }
+                    if let Some((result, returned)) = result_substitution {
+                        result_substitutions.insert(result, returned);
                     }
                     instruction_index += inserted;
                     site += 1;
@@ -609,6 +613,20 @@ impl LlModule {
                     processed_helpers.insert(helper.name);
                 }
                 block_index += 1;
+            }
+            // Returned locals have fresh helper/proxy names, so replacements cannot
+            // refer to other removed call results. Later call arguments consume the
+            // pending map above; all other uses, including backedge phis, need one walk.
+            if !result_substitutions.is_empty() {
+                for caller_block in &mut self.functions[function_index].blocks {
+                    if let Some(typed) = caller_block.typed_mut() {
+                        typed.substitute_values(&result_substitutions);
+                        #[cfg(test)]
+                        {
+                            stats.rewritten_blocks += 1;
+                        }
+                    }
+                }
             }
         }
         for (key, pointee) in cloned_pointees {

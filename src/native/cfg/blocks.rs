@@ -815,16 +815,13 @@ pub(in crate::native) fn infer_loop_merges(blocks: &[BodyBlock]) -> HashMap<Stri
         let Some(header_idx) = order.get(&header.name).copied() else {
             continue;
         };
-        let header_reachable = reachable_from(&header.name, &successors);
-        let back_preds = predecessors
+        let mut back_preds = predecessors
             .get(&header.name)
             .into_iter()
             .flat_map(|preds| preds.iter())
             .filter(|pred| {
-                header_reachable.contains(*pred)
-                    && doms
-                        .as_ref()
-                        .is_some_and(|d| d.dominates(&header.name, pred))
+                doms.as_ref()
+                    .is_some_and(|d| d.dominates(&header.name, pred))
                     && order
                         .get(*pred)
                         .copied()
@@ -832,6 +829,11 @@ pub(in crate::native) fn infer_loop_merges(blocks: &[BodyBlock]) -> HashMap<Stri
             })
             .cloned()
             .collect::<Vec<_>>();
+        if back_preds.is_empty() {
+            continue;
+        }
+        let header_reachable = reachable_from(&header.name, &successors);
+        back_preds.retain(|pred| header_reachable.contains(pred));
         if back_preds.is_empty() {
             continue;
         }
@@ -993,6 +995,7 @@ pub(in crate::native) fn infer_switch_merges(blocks: &[BodyBlock]) -> HashMap<St
         .iter()
         .map(|b| (b.name.clone(), block_successors(b)))
         .collect();
+    let reachability = IndexedReachability::new(blocks, &successors);
     let mut merges = HashMap::new();
     for block in blocks {
         let Some(targets) = switch_targets(block) else {
@@ -1007,7 +1010,7 @@ pub(in crate::native) fn infer_switch_merges(blocks: &[BodyBlock]) -> HashMap<St
         }
         let reachable = live_targets
             .iter()
-            .map(|target| (*target, reachable_from(target, &successors)))
+            .map(|target| (*target, reachability.reachable(target, None)))
             .collect::<Vec<_>>();
         let Some(start) = order.get(&block.name).map(|i| i + 1) else {
             continue;
@@ -1015,7 +1018,7 @@ pub(in crate::native) fn infer_switch_merges(blocks: &[BodyBlock]) -> HashMap<St
         for candidate in blocks.iter().skip(start) {
             if reachable
                 .iter()
-                .all(|(_, seen)| seen.contains(&candidate.name))
+                .all(|(_, seen)| reachability.contains(seen, &candidate.name))
                 && reachable
                     .iter()
                     .all(|(target, _)| all_paths_reach_target(target, &candidate.name, &successors))
@@ -1970,9 +1973,11 @@ fn normalize_one_switch_bypass_merge(
         .iter()
         .map(|b| (b.name.clone(), block_successors(b)))
         .collect();
+    let reachability = IndexedReachability::new(blocks, &successors);
 
-    for block in blocks.clone() {
-        let Some(targets) = switch_targets(&block) else {
+    for block_index in 0..blocks.len() {
+        let block = &blocks[block_index];
+        let Some(targets) = switch_targets(block) else {
             continue;
         };
         let live_targets = targets
@@ -1985,7 +1990,7 @@ fn normalize_one_switch_bypass_merge(
         }
         let reachable = live_targets
             .iter()
-            .map(|target| (target, reachable_from(target, &successors)))
+            .map(|target| (target, reachability.reachable(target, None)))
             .collect::<Vec<_>>();
         let Some(start) = order.get(&block.name).map(|i| i + 1) else {
             continue;
@@ -1995,7 +2000,7 @@ fn normalize_one_switch_bypass_merge(
         for candidate in blocks.iter().skip(start) {
             if !reachable
                 .iter()
-                .all(|(_, seen)| seen.contains(&candidate.name))
+                .all(|(_, seen)| reachability.contains(seen, &candidate.name))
             {
                 continue;
             }
@@ -2288,6 +2293,33 @@ mod tests {
             vec![terminator.to_string()],
             BlockRole::Normal,
         )
+    }
+
+    #[test]
+    fn indexed_switch_reachability_preserves_real_block_membership() {
+        let blocks = vec![
+            block("%entry", "br i1 %c, label %cycle, label %missing"),
+            block("%cycle", "br i1 %c, label %entry, label %merge"),
+            block("%merge", "ret void"),
+            block("%unreachable", "unreachable"),
+        ];
+        let successors = blocks
+            .iter()
+            .map(|block| (block.name.clone(), block_successors(block)))
+            .collect::<HashMap<_, _>>();
+        let indexed = IndexedReachability::new(&blocks, &successors);
+        for start in ["%entry", "%cycle", "%merge", "%unreachable", "%missing"] {
+            let original = reachable_from(start, &successors);
+            let dense = indexed.reachable(start, None);
+            for candidate in &blocks {
+                assert_eq!(
+                    indexed.contains(&dense, &candidate.name),
+                    original.contains(&candidate.name),
+                    "{start} -> {}",
+                    candidate.name
+                );
+            }
+        }
     }
 
     #[test]

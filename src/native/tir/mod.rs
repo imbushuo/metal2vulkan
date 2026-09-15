@@ -48,6 +48,7 @@ mod phi_edit;
 mod rename;
 pub(in crate::native) use rename::renamed_llvalue;
 mod substitute;
+pub(in crate::native) use substitute::substitute_typed_value;
 
 /// Canonicalize an SSA identity created by lowering LLVM control flow to SPIR-V's block-predecessor
 /// model. LLVM switch edges may repeat a destination, while SPIR-V permits exactly one `OpPhi` pair

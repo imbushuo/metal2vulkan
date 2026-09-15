@@ -94,6 +94,13 @@ Four source transforms intentionally operate before typed parsing: async-copy lo
 vector/scalar pointer-merge lowering, SROA, and internal-helper inlining. Alternate representations
 receive the same already-lowered source, so they do not observe a different program.
 
+Ordinary leaf-helper inlining collects returned-value substitutions per caller, resolves them
+when preparing subsequent helper arguments, and rewrites the remaining caller uses once. Fresh
+helper-local/proxy identities keep that map independent of removed call-result names; backedge
+phis are included in the final rewrite. Switch reconvergence uses the existing indexed CFG
+reachability for real-block membership rather than allocating string sets per arm. The graph
+is rebuilt after topology changes, and path proofs and merge selection remain unchanged.
+
 ## Validity by construction
 
 `finish_module` is the common owned-module boundary for primary and alternate emission. It performs

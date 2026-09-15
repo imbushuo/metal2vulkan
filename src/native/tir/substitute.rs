@@ -13,7 +13,10 @@ use std::collections::HashMap;
 
 type Substitutions = HashMap<String, TypedValue>;
 
-fn substitute_typed_value(value: &mut TypedValue, substitutions: &Substitutions) {
+pub(in crate::native) fn substitute_typed_value(
+    value: &mut TypedValue,
+    substitutions: &Substitutions,
+) {
     if let LlValue::Local(name) = &value.value {
         if let Some(replacement) = substitutions.get(name) {
             *value = replacement.clone();

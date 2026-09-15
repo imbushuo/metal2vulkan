@@ -29,6 +29,84 @@ fn inline_bindings(function: &LlFunction) -> Vec<&crate::native::tir::TirInst> {
 }
 
 #[test]
+fn chained_helper_results_rewrite_each_caller_block_once() {
+    let mut ll = String::from(
+        "define internal i32 @identity(i32 %value) {\n ret i32 %value\n}\n\
+         define i32 @main() {\nentry:\n %v0 = call i32 @identity(i32 7)\n",
+    );
+    for index in 1..256 {
+        ll.push_str(&format!(
+            " %v{index} = call i32 @identity(i32 %v{})\n",
+            index - 1
+        ));
+    }
+    ll.push_str(" ret i32 %v255\n}\n");
+    let mut module = parsed(&ll);
+    let stats = module.inline_ordinary_leaf_helpers();
+    assert_eq!(stats.splices, 256);
+    assert_eq!(stats.rewritten_blocks, 1);
+    let main = function(&module, "main");
+    let bindings = inline_bindings(main);
+    assert_eq!(bindings.len(), 256);
+    assert!(matches!(
+        bindings[0].operands.first(),
+        Some(TirOperand::Const {
+            value: LlValue::Int(7),
+            ..
+        })
+    ));
+    for pair in bindings.windows(2) {
+        assert!(matches!(
+            pair[1].operands.first(),
+            Some(TirOperand::Value { name, .. }) if Some(name) == pair[0].result.as_ref()
+        ));
+    }
+    let ret = &main.blocks[0].typed.as_ref().unwrap().ret;
+    assert!(matches!(
+        ret,
+        RetEmit::Value(TypedValue { value: LlValue::Local(name), .. })
+            if Some(name) == bindings.last().unwrap().result.as_ref()
+    ));
+}
+
+#[test]
+fn deferred_helper_result_reaches_earlier_backedge_phi() {
+    let mut module = parsed(
+        "define internal i32 @increment(i32 %value) {\n\
+           %sum = add i32 %value, 1\n ret i32 %sum\n}\n\
+         define i32 @main() {\n\
+         entry:\n br label %loop\n\
+         loop:\n %current = phi i32 [ 0, %entry ], [ %next, %body ]\n\
+           %done = icmp eq i32 %current, 8\n\
+           br i1 %done, label %exit, label %body\n\
+         body:\n %next = call i32 @increment(i32 %current)\n br label %loop\n\
+         exit:\n ret i32 %current\n}\n",
+    );
+    let stats = module.inline_ordinary_leaf_helpers();
+    assert_eq!(stats.splices, 1);
+    assert_eq!(stats.rewritten_blocks, 4);
+    let main = function(&module, "main");
+    let increment = main
+        .carrier_insts()
+        .find(|inst| inst.opcode == "add")
+        .unwrap();
+    let phi = main.carrier_insts().find(|inst| inst.is_phi()).unwrap();
+    let (_, incoming) = phi.phi_incoming().as_ref().unwrap();
+    assert!(
+        incoming.iter().any(|(value, predecessor)| matches!(
+            value,
+            LlValue::Local(name) if Some(name) == increment.result.as_ref() && predecessor == "%body"
+        )),
+        "incoming={incoming:?}, increment={:?}",
+        increment.result
+    );
+    assert!(!incoming.iter().any(|(value, _)| matches!(
+        value,
+        LlValue::Local(name) if name == "%next"
+    )));
+}
+
+#[test]
 fn inlines_the_general_one_block_leaf_axes() {
     let ll = r#"
 define internal i32 @constant() {
@@ -67,6 +145,7 @@ declare float @air.sqrt(float)
         TypedInlineStats {
             splices: 3,
             helper_instances: 3,
+            rewritten_blocks: 1,
         }
     );
     let main = function(&module, "main");
@@ -181,6 +260,7 @@ define void @main() {
         TypedInlineStats {
             splices: 1,
             helper_instances: 1,
+            rewritten_blocks: 0,
         }
     );
     let main = function(&module, "main");
@@ -230,6 +310,7 @@ define void @main() {
         TypedInlineStats {
             splices: 2,
             helper_instances: 1,
+            rewritten_blocks: 1,
         }
     );
     let main = function(&module, "main");
@@ -324,6 +405,7 @@ define void @main(ptr %function) {
         TypedInlineStats {
             splices: 1,
             helper_instances: 1,
+            rewritten_blocks: 1,
         },
         "only the reachable one-block leaf is inlined"
     );
@@ -463,6 +545,7 @@ define void @main() {
         TypedInlineStats {
             splices: 2,
             helper_instances: 2,
+            rewritten_blocks: 1,
         }
     );
     assert!(call_names(function(&module, "main")).is_empty());
@@ -495,6 +578,7 @@ define void @main() {
         TypedInlineStats {
             splices: 1,
             helper_instances: 1,
+            rewritten_blocks: 0,
         }
     );
     assert!(
