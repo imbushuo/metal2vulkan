@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Product translation no longer launches LLVM/SPIR-V executables or writes their intermediate
+  files. LLVM bitcode I/O uses a lazily loaded shared library; full SPIRV-Tools assembly and Vulkan
+  1.2 validation are statically linked from pinned sources. macOS and Linux remain supported.
+- `tools::llvm_disassemble`, `tools::llvm_assemble`, and `tools::spirv_assemble` provide in-memory
+  operations. The generic `tools::run` / `run_with_timeout` subprocess APIs, their timeout markers,
+  and executable-path overrides were removed. Use `METAL2VULKAN_LLVM_LIBRARY` for nonstandard LLVM
+  installations. Existing translation signatures and `spirv_val_bytes`'s unused scratch argument
+  are retained.
+- Harvest disassembles through project-owned workers with fixed 20-second/500-MiB limits rather
+  than spawning `llvm-dis`; `--llvm-dis` and `--llvm-dis-timeout-secs` were removed. Native calls in
+  the public library run in the caller's process, not in implicitly spawned workers.
+- Native Rust tests no longer probe for installed SPIR-V executables before validating. Their
+  assembly, disassembly, and validation also run in process, so tool-less installations retain the
+  same test coverage.
+
 ### Fixed
 
 - A texture argument the pipeline variant does not provide is no longer answered by the module's

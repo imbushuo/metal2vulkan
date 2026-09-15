@@ -8,7 +8,7 @@ validated. Validator output is a verdict, never a code-generation input.
 
 ```text
 .air | sanitized .ll
-  └─ llvm-dis when needed + AIR sanitization
+  └─ in-process libLLVM bitcode reader/printer when needed + AIR sanitization
   └─ shared pre-parse AIR lowering
   └─ stage metadata and target-layout parsing
   └─ typed LLVM/AIR parse
@@ -24,19 +24,52 @@ validated. Validator output is a verdict, never a code-generation input.
   └─ if an owned invariant rejects the primary representation:
        construct one structurally selected alternate representation
   └─ canonical assembly
-  └─ spirv-val --target-env vulkan1.2
+  └─ statically linked SPIRV-Tools validation (Vulkan 1.2)
   └─ optional read-only reflection over the returned bytes
 ```
 
-There is no production loop from `spirv-val` back into emission or rewriting. A validation failure
+There is no production loop from the SPIRV-Tools validator back into emission or rewriting. A validation failure
 is returned as `Err` / CLI `FALLBACK`. The product does not parse the failed output and does not use
 validator wording to select another representation.
 
 `translate_native_no_retry` retains its compatibility name. It constructs the primary
-representation up to, but not including, external validation and does not select an alternate when
+representation up to, but not including, SPIRV-Tools validation and does not select an alternate when
 an owned invariant rejects that representation. `translate_native_primary_validated` validates
 that same primary-only construction. Ordinary `translate*` entry points may select an alternate
 before validation from the structural facts described below.
+
+### Native-library boundary
+
+`tools` owns in-memory LLVM disassembly/assembly and SPIR-V assembly/validation. LLVM is a lazily
+loaded shared library accessed through its stable C ABI, with a fresh context/module per call and
+explicit disposal through LLVM's allocator. The bitcode reader returns diagnostics rather than
+using LLVM's process-terminating default error handler. Textual translation does not load LLVM.
+
+SPIRV-Tools and its vendored-source crate are pinned to `0.13.3` (upstream SPIRV-Tools `v2025.3`,
+revision `33e02568`) and statically linked. Each operation owns its
+own context; validation retains its concurrency permit but needs neither pipes nor scratch files.
+The full Vulkan 1.2 validator runs once, without relaxed options or timeout-retry escalation.
+SPIR-V byte slices are decoded into aligned words, including when the caller provides an unaligned
+slice. The product has no subprocess runner.
+
+Native calls execute in the caller's thread. Hard cancellation belongs at the whole-process
+boundary: corpus translation and harvest use project-owned workers with 20-second/500-MiB guards.
+These workers do not launch LLVM or SPIR-V executables. The optional Metal oracle still invokes
+Apple's compiler/linker; it is not part of the published translator.
+
+The validator's version is no longer whatever happens to be installed on the host. Tests pin its
+known coverage: it rejects compute derivatives lacking their execution mode, but accepts a Logical
+pointer null rejected by the product's owned construction checks. Neither owned check is removed
+or relaxed when replacing the external validator.
+
+Release-mode comparison on macOS arm64 (8 logical CPUs, LLVM 23.1.1), using all 156 owned public
+`.ll` fixtures, preserved 155 successful SPIR-V byte sequences and one existing unsupported-input
+fallback. The slowest new attempt was 103 ms. Five additional paired runs of the largest fixture
+(`kernel_wide_convert_and_math_leftovers.ll`, 46,255 bytes) as bitcode averaged 53 ms with external
+tools versus 38 ms with linked tools; five passthrough runs averaged 10 ms versus 4 ms. Peak RSS
+across these measured new-process runs was 34.5 MiB. Attempts included process startup, translation,
+validation, and reporting, guarded at 20 seconds/500 MiB. This is public-fixture evidence, not a
+private-corpus or Linux performance claim.
 
 ## Typed ownership
 

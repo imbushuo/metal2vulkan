@@ -149,13 +149,7 @@ fn native_unsigned_texture_fetch_max_uses_scalar_atomic_image_format() {
     assert!(asm.contains("R32ui"), "{asm}");
     assert!(asm.contains("OpImageTexelPointer"), "{asm}");
     assert!(asm.contains("OpAtomicUMax"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -384,13 +378,7 @@ attributes #1 = { convergent nounwind memory(none) }
         !asm.contains("is not a logical pointer"),
         "must not emit an illegal pointer load:\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -434,13 +422,7 @@ attributes #1 = { convergent nounwind memory(argmem: write) }
     assert_eq!(asm.matches("OpImageWrite").count(), 2, "{asm}");
     assert!(asm.contains("Binding 480"), "{asm}");
     assert!(asm.contains("Binding 481"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -479,13 +461,7 @@ attributes #1 = { convergent nounwind memory(argmem: write) }
     assert!(asm.contains("OpAccessChain"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("BuiltIn LocalInvocationIndex"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 
     let _ = std::fs::remove_dir_all(tmp);
 }
@@ -532,13 +508,7 @@ attributes #1 = { convergent nounwind memory(argmem: write) }
         asm.contains("OpAccessChain"),
         "expected fixed descriptor-array element accesses:\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -575,13 +545,7 @@ declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
     let asm = disassemble(&spv).expect("disassemble");
     assert!(!asm.contains("llvm.memcpy"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -636,13 +600,7 @@ attributes #3 = { convergent nounwind memory(argmem: write) }
     assert!(asm.contains("R32f"), "{asm}");
     assert!(asm.contains("Binding 480"), "{asm}");
     assert_eq!(asm.matches("OpImageWrite").count(), 1, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 
     let custom_layout = crate::reflect::DescriptorLayout {
         set: 4,
@@ -805,13 +763,7 @@ attributes #1 = { convergent nounwind memory(argmem: write) }
     assert!(asm.contains("Rgba16f"), "{asm}");
     assert!(asm.contains("OpAccessChain"), "{asm}");
     assert_eq!(asm.matches("OpImageWrite").count(), 1, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let specialized = crate::translate_sanitized_native_with_options(
         ll,
         Stage::Kernel,
@@ -884,13 +836,7 @@ attributes #1 = { convergent nounwind memory(argmem: write) }
     assert!(asm.contains("Binding 480"), "{asm}");
     assert!(asm.contains("Binding 481"), "{asm}");
     assert_eq!(asm.matches("OpImageWrite").count(), 2, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -950,13 +896,7 @@ attributes #3 = { convergent nounwind memory(argmem: write) }
     assert!(asm.contains("Binding 480"), "{asm}");
     assert!(asm.contains("Binding 481"), "{asm}");
     assert_eq!(asm.matches("OpImageWrite").count(), 1, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -1047,13 +987,7 @@ declare ptr addrspace(1) @air.get_null_texture_2d()
     let _ = std::fs::create_dir_all(&tmp);
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp)
         .expect("late null texture must not invalidate a disjoint aggregate field");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -1091,13 +1025,7 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
         .expect("private texture field must preserve its resource identity");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageQuerySizeLod"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -1178,13 +1106,7 @@ entry:
     assert!(asm.contains("OpTypeSampler"), "{asm}");
     assert!(asm.contains("Binding 37"), "{asm}");
     assert!(asm.contains("Binding 162"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1302,13 +1224,7 @@ entry:
     .expect_err("a sampler moved into the texture band must be rejected");
     assert!(error.contains("outside its ABI band"), "{error}");
 
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -1363,13 +1279,7 @@ entry:
     reflection
         .validate_descriptor_abi()
         .expect("reflection descriptor ABI");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -1407,13 +1317,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageSampleExplicitLod"), "{asm}");
     assert!(!asm.contains("OpImageSampleImplicitLod"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1453,13 +1357,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
         .expect("find OpImageSampleExplicitLod");
     assert!(sample.contains("Lod"), "{sample}\n\n{asm}");
     assert!(sample.contains("ConstOffset"), "{sample}\n\n{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2064,13 +1962,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
     assert!(asm.contains("OpImageQuerySizeLod"), "{asm}");
     assert!(asm.contains("OpFDiv"), "{asm}");
     assert!(asm.contains("OpFAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2106,13 +1998,7 @@ declare { float, i8 } @air.sample_depth_2d.f32(ptr addrspace(1), ptr addrspace(2
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageSampleExplicitLod"), "{asm}");
     assert!(!asm.contains("OpImageSampleImplicitLod"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2159,13 +2045,7 @@ declare { float, i8 } @air.sample_depth_2d.f32(ptr addrspace(1), ptr addrspace(2
         .expect("find OpImageSampleExplicitLod");
     assert!(sample.contains("Lod"), "{sample}\n\n{asm}");
     assert!(!asm.contains("OpImageSampleImplicitLod"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2253,13 +2133,7 @@ declare { float, i8 } @air.sample_depth_2d.f32(ptr addrspace(1), ptr addrspace(2
         .find(|line| line.contains("OpImageSample"))
         .expect("find the depth sample");
     assert!(sample.contains("ConstOffset"), "{sample}\n\n{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2305,13 +2179,7 @@ declare { float, i8 } @air.sample_depth_2d.f32(ptr addrspace(1), ptr addrspace(2
     assert!(asm.contains("OpImageQuerySizeLod"), "{asm}");
     assert!(asm.contains("OpFDiv"), "{asm}");
     assert!(asm.contains("OpFAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2357,13 +2225,7 @@ declare { float, i8 } @air.sample_compare_depth_2d.f32(ptr addrspace(1), ptr add
         .find(|line| line.contains("OpImageSample"))
         .expect("find the compare-depth sample");
     assert!(sample.contains("ConstOffset"), "{sample}\n\n{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2409,13 +2271,7 @@ declare { float, i8 } @air.sample_compare_depth_2d.f32(ptr addrspace(1), ptr add
     assert!(asm.contains("OpImageQuerySizeLod"), "{asm}");
     assert!(asm.contains("OpFDiv"), "{asm}");
     assert!(asm.contains("OpFAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2450,13 +2306,7 @@ declare { float, i8 } @air.sample_depth_2d.f32(ptr addrspace(1), ptr addrspace(2
     let asm = disassemble(&spv).expect("disassemble");
     assert_eq!(asm.matches("OpImageFetch").count(), 4, "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2493,13 +2343,7 @@ declare { float, i8 } @air.sample_depth_2d_array.f32(ptr addrspace(1), ptr addrs
             .any(|line| line.contains("OpTypeVector") && line.ends_with(" 3")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2609,13 +2453,7 @@ declare { <4 x float>, i8 } @air.sample_texture_cube.v4f32(ptr addrspace(1), ptr
     // placeholder is the synthesized one after it.
     assert!(asm.contains("Binding 160"), "{asm}");
     assert!(asm.contains("Binding 161"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2708,13 +2546,7 @@ declare { float, i8 } @air.sample_compare_depth_2d_array.f32(ptr addrspace(1), p
     assert!(asm.contains("OpImageSampleImplicitLod"), "{asm}");
     assert!(asm.contains("OpConvertUToF"), "{asm}");
     assert!(asm.contains("OpFOrdLessThanEqual"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3005,13 +2837,7 @@ declare { <4 x half>, i8 } @air.sample_texture_2d_grad.v4f16(ptr addrspace(1), p
         !sample.contains(" Lod "),
         "SPIR-V forbids the Lod image operand beside Grad: {sample}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -3065,13 +2891,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d_array.v4f32(ptr addrspace(1),
     );
     assert!(asm.contains("OpCompositeConstruct"), "{asm}");
     assert!(asm.contains("OpSampledImage"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3114,13 +2934,7 @@ declare { <4 x float>, i8 } @air.sample_texture_1d_array.v4f32(ptr addrspace(1),
         "{asm}"
     );
     assert!(asm.contains("Binding 1"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -3166,13 +2980,7 @@ declare float @air.calculate_unclamped_lod_texture_2d(ptr addrspace(1) readonly 
             .any(|line| line.contains("OpCompositeExtract") && line.ends_with(" 1")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3216,13 +3024,7 @@ declare float @air.calculate_clamped_lod_texture_2d(ptr addrspace(1) readonly ca
             .any(|line| line.contains("OpCompositeExtract") && line.ends_with(" 0")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3271,13 +3073,7 @@ declare float @air.calculate_clamped_lod_texture_2d(ptr addrspace(1), ptr addrsp
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageQueryLod"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3324,13 +3120,7 @@ declare i32 @air.get_num_samples.i32(i32)
             .any(|line| line.contains("OpConstant") && line.ends_with(" 4")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3365,13 +3155,7 @@ declare i32 @air.get_num_mip_levels_depth_cube(ptr addrspace(1) readonly capture
     assert!(asm.contains("OpImageQueryLevels"), "{asm}");
     assert!(!asm.contains("OpBitcast"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3414,13 +3198,7 @@ declare { <4 x float>, i8 } @air.gather_texture_2d.v4f32(ptr addrspace(1), ptr a
         assert!(!line.contains("ConstOffset"), "{line}");
     }
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3460,13 +3238,7 @@ declare { <4 x i32>, i8 } @air.gather_texture_2d.u.v4i32(ptr addrspace(1), ptr a
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageGather"), "{asm}");
     assert!(asm.contains("OpTypeImage"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3520,13 +3292,7 @@ declare void @air.write_texture_2d.u.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
     assert!(asm.contains("OpImageGather"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3571,13 +3337,7 @@ declare { <4 x i32>, i8 } @air.gather_texture_2d.u.v4i32(ptr addrspace(1), ptr a
     {
         assert!(!line.contains("%float"), "{line}\n{asm}");
     }
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3618,13 +3378,7 @@ declare { <4 x half>, i8 } @air.gather_texture_2d.v4f16(ptr addrspace(1), ptr ad
     assert!(asm.contains("OpImageGather"), "{asm}");
     assert!(asm.contains("OpFConvert"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3693,13 +3447,7 @@ declare { <4 x half>, i8 } @air.gather_texture_2d_array.v4f16(ptr addrspace(1), 
         "{asm}"
     );
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3742,13 +3490,7 @@ declare { <4 x float>, i8 } @air.gather_texture_2d.v4f32(ptr addrspace(1), ptr a
         assert!(line.contains("ConstOffset"), "{line}\n\n{asm}");
     }
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3791,13 +3533,7 @@ declare { <4 x float>, i8 } @air.gather_texture_2d.v4f32(ptr addrspace(1), ptr a
         assert!(line.contains("ConstOffset"), "{line}\n\n{asm}");
     }
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3847,13 +3583,7 @@ declare { <4 x float>, i8 } @air.gather_texture_2d.v4f32(ptr addrspace(1), ptr a
     assert!(asm.contains("OpImageQuerySizeLod"), "{asm}");
     assert!(asm.contains("OpFDiv"), "{asm}");
     assert!(asm.contains("OpFAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3902,13 +3632,7 @@ declare { <4 x half>, i8 } @air.gather_texture_2d.v4f16(ptr addrspace(1), ptr ad
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageGather"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3955,13 +3679,7 @@ declare <2 x float> @air.convert.f.v2f32.u.v2i16(<2 x i16>)
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageGather"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4011,13 +3729,7 @@ declare <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32>)
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageGather"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4082,13 +3794,7 @@ declare { <4 x half>, i8 } @air.gather_texture_2d.v4f16(ptr addrspace(1), ptr ad
     );
     assert!(!formatless_asm.contains("StorageImageWriteWithoutFormat"));
     tools::spirv_val_bytes(&formatless, &tmp).expect("formatless pixel gather spirv-val");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4130,13 +3836,7 @@ declare { <4 x half>, i8 } @air.gather_texture_2d.v4f16(ptr addrspace(1), ptr ad
     assert!(asm.contains("OpCompositeExtract"), "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageGather"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4176,13 +3876,7 @@ declare { <4 x float>, i8 } @air.gather_depth_2d.v4f32(ptr addrspace(1), ptr add
     // never the retired zero-null harness contract.
     assert!(asm.contains("OpImageGather"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// `air.gather_depth_2d_array` takes its coordinate domain from the sampler, exactly as the
@@ -4266,13 +3960,7 @@ declare {{ <4 x float>, i8 }} @air.gather_depth_2d_array.v4f32(ptr addrspace(1),
     ));
     let _ = std::fs::create_dir_all(&tmp);
     let spv = crate::translate_sanitized_native(&ll, Stage::Kernel, &tmp).expect("translate");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     spv
 }
 
@@ -4304,13 +3992,7 @@ entry:
     assert!(asm.contains("OpTypeImage"), "{asm}");
     assert!(asm.contains(" 1D "), "{asm}");
     assert!(asm.contains("Binding 32"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4346,13 +4028,7 @@ declare void @air.write_texture_2d.u.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
     assert!(asm.contains("Rgba8ui"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("Binding 487"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4718,13 +4394,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4760,13 +4430,7 @@ declare i32 @air.get_num_samples_texture_2d_ms(ptr addrspace(1))
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageQuerySamples"), "{asm}");
     assert!(asm.contains("OpCapability ImageQuery"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4800,13 +4464,7 @@ declare i32 @air.get_num_samples_texture_2d(ptr addrspace(1))
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(!asm.contains("OpImageQuerySamples"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4842,13 +4500,7 @@ declare i32 @air.get_num_samples_texture_2d_ms_array(ptr addrspace(1))
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageQuerySamples"), "{asm}");
     assert!(asm.contains("OpCapability ImageQuery"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// Regression: `bugs/compute-multisample-query-reports-one`.
@@ -4939,13 +4591,7 @@ declare i32 @air.get_num_samples_texture_2d_ms(ptr addrspace(1))
          defect that made a four-sample kernel visit only sample zero: {asm}"
     );
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4991,13 +4637,7 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageQuerySizeLod"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -5045,13 +4685,7 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
     // write-capable, so it binds as a storage image and the query takes the LOD-less form.
     assert!(asm.contains("OpImageQuerySize "), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -5099,13 +4733,7 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageQuerySizeLod"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -5166,13 +4794,7 @@ declare i32 @air.get_height_texture_2d(ptr addrspace(1), i32)
         !crate::native::construct_opaque_image_selects_module(&mut module),
         "final resource construction must leave no portable opaque-image closure"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -5574,13 +5196,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.v4f16(ptr addrspace(1), p
     );
     assert!(formatless_asm.contains("Unknown"), "{formatless_asm}");
     tools::spirv_val_bytes(&formatless, &tmp).expect("formatless imageblock write spirv-val");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -5641,13 +5257,7 @@ declare void @air.store.implicit_imageblock.v2f16(<2 x half>, i32, <2 x i16>, i3
     assert!(asm.contains("Binding 200"), "{asm}");
     assert!(asm.contains("Binding 206"), "{asm}");
     assert!(!asm.contains("air.load.implicit_imageblock"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -5696,13 +5306,7 @@ declare void @air.write_imageblock_slice_to_texture_2d_array.i16.v4f16(ptr addrs
             .any(|line| line.contains("OpTypeImage") && line.contains("2D 0 1 0 2 Rgba16f")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -5745,13 +5349,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4f16(ptr addrspace(1
     assert!(asm.contains("OpConstantNull"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
     assert!(!asm.contains("air.imageblock"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// A tile whose cells are narrow enough holds every cell a threadgroup can address.
@@ -5817,13 +5415,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4f16(ptr addrspace(1
     assert_eq!(cells, "1024", "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("air.imageblock"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -5977,13 +5569,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4i16(ptr addrspace(1
         ],
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -6026,13 +5612,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4f16(ptr addrspace(1
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("air.imageblock"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6077,13 +5657,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v2f16(ptr addrspace(1
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("OpCompositeExtract"), "{asm}");
     assert!(!asm.contains("air.imageblock"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6129,13 +5703,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4i16(ptr addrspace(1
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("OpSConvert"), "{asm}");
     assert!(!asm.contains("air.imageblock"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6186,13 +5754,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v4f32(ptr addrspace(1
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("air.get_imageblock"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6233,13 +5795,7 @@ declare ptr addrspace(4) @air.imageblock_data(<2 x i16>, i32, i16)
     assert!(asm.contains("OpTypeFloat 32"), "{asm}");
     assert!(!asm.contains("OpTypeFloat 16"), "{asm}");
     assert!(!asm.contains("OpBitcast %_ptr_"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// The shared cell array is linearised `y * width + x`, and `width` is the tile's, which is the
@@ -6342,13 +5898,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.v4f16(ptr addrspace(1), p
             .any(|inst| second_operand_constant(inst) == Some(16)),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -6575,13 +6125,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.v4f16(ptr addrspace(1), p
             .any(|line| line.contains("OpVariable") && line.contains("Private")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// Two `air.imageblock_data` calls at one coordinate name one cell, so they allocate one scratch
@@ -6631,13 +6175,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.v4f16(ptr addrspace(1), p
         .count();
     assert_eq!(scratch_vars, 1, "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6759,13 +6297,7 @@ declare ptr addrspace(4) @air.imageblock_data(<2 x i16>, i32, i16)
     assert!(asm.contains("OpLoad"), "{asm}");
     assert!(!asm.contains("OpPtrAccessChain"), "{asm}");
     assert!(!asm.contains("OpBitcast %_ptr_"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6831,13 +6363,7 @@ declare void @air.wg.barrier(i32, i32)
             .any(|line| line.contains("OpConstant") && line.ends_with(" 1024")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6881,13 +6407,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.f16(ptr addrspace(1),
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
     assert!(!asm.contains("OpBitcast %_ptr_Workgroup"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6932,13 +6452,7 @@ declare void @air.write_imageblock_slice_to_texture_2d.i16.v2f16(ptr addrspace(1
     assert_eq!(asm.matches("OpImageWrite").count(), 2, "{asm}");
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
     assert!(!asm.contains("OpBitcast %_ptr_Private"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -6987,13 +6501,7 @@ declare ptr addrspace(4) @air.imageblock_data(<2 x i16>, i32, i16)
         "{asm}"
     );
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7056,13 +6564,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
     );
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7129,13 +6631,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
     );
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7176,13 +6672,7 @@ declare void @air.write_texture_2d_array.u.v4i32(ptr addrspace(1), <2 x i32>, i3
     assert!(asm.contains("Rgba8ui"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("Binding 482"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7219,13 +6709,7 @@ declare void @air.write_texture_cube.v4f32(ptr addrspace(1), <2 x i32>, i32, <4 
     assert!(asm.contains("OpCompositeConstruct"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("Binding 480"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7263,13 +6747,7 @@ declare void @air.write_texture_2d_array.i16.v4f16(ptr addrspace(1), <2 x i16>, 
     assert!(asm.contains("OpUConvert"), "{asm}");
     assert!(asm.contains("OpCompositeConstruct"), "{asm}");
     assert!(asm.contains("OpImageFetch"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7329,13 +6807,7 @@ declare { float, i8 } @air.read_depth_2d.i16.f32(ptr addrspace(1), ptr addrspace
         ),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7393,13 +6865,7 @@ declare { float, i8 } @air.read_depth_2d.i16.f32(ptr addrspace(1), i32, <2 x i16
         ),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7445,13 +6911,7 @@ declare void @air.write_texture_2d_array.i16.v4f16(ptr addrspace(1), <2 x i16>, 
     assert!(asm.contains("OpConvertFToS"), "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7500,13 +6960,7 @@ declare void @air.write_texture_2d_array.i16.v4f16(ptr addrspace(1), <2 x i16>, 
     assert!(asm.contains("OpLogicalAnd"), "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7555,13 +7009,7 @@ declare void @air.write_texture_2d.i16.u.v4i16(ptr addrspace(1), <2 x i16>, <4 x
     assert!(!asm.contains("OpFMul"), "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7610,13 +7058,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
     assert_eq!(asm.matches("OpTypeInt 32 1").count(), 1, "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7659,13 +7101,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
     assert!(asm.contains("OpIAdd"), "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7712,13 +7148,7 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
     assert!(asm.contains("OpIAdd"), "{asm}");
     assert!(!asm.contains("OpSampledImage"), "{asm}");
     assert!(!asm.contains("OpImageSample"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7761,13 +7191,7 @@ declare void @air.write_texture_buffer_1d.v4f32(ptr addrspace(1), i32, <4 x floa
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("Binding 480"), "{asm}");
     assert!(!asm.contains("OpCapability Sampled1D"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7806,13 +7230,7 @@ declare { <4 x float>, i8 } @air.read_texture_buffer_1d.v4f32(ptr addrspace(1), 
         .find(|line| line.contains("OpImageFetch"))
         .expect("OpImageFetch");
     assert!(!fetch.contains(" Lod "), "{fetch}\n\n{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7851,13 +7269,7 @@ declare void @air.write_texture_1d.i16.v4f32(ptr addrspace(1), i16, <4 x float>,
     assert!(!asm.contains("OpCapability Sampled1D"), "{asm}");
     assert!(asm.contains("1D 0 0 0 2 R32f"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -7903,14 +7315,8 @@ declare void @air.write_texture_2d.i16.u.v4i16(ptr addrspace(1), <2 x i16>, <4 x
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
     assert!(asm.contains("OpUDiv"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        if let Err(err) = tools::spirv_val_bytes(&spv, &tmp) {
-            panic!("spirv-val: {err}\n{asm}");
-        }
+    if let Err(err) = tools::spirv_val_bytes(&spv, &tmp) {
+        panic!("spirv-val: {err}\n{asm}");
     }
 }
 
@@ -7964,13 +7370,7 @@ attributes #0 = { nounwind }
             .any(|line| line.contains("OpImageFetch") && line.contains("Lod")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// The sample index of a multisample depth read is the operand AFTER the coordinate.
@@ -8048,13 +7448,7 @@ attributes #0 = { nounwind }
         loaded, sample,
         "fetch does not sample at the sample id\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -8091,13 +7485,7 @@ declare i32 @air.get_height_texture_2d_ms(ptr addrspace(1))
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpImageQuerySize "), "{asm}");
     assert!(!asm.contains("OpImageQuerySizeLod"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -8149,13 +7537,7 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), <2 x i3
     let asm = disassemble(&spv).expect("disassemble");
     assert_eq!(asm.matches("OpImageFetch").count(), 4, "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -8204,13 +7586,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr a
         !crate::native::construct_opaque_image_selects_module(&mut module),
         "final resource construction must leave no sampled-image selection closure"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -8246,14 +7622,8 @@ declare void @air.write_texture_2d.u.v4i16(ptr addrspace(1), <2 x i32>, <4 x i16
     assert!(asm.contains("OpCompositeExtract"), "{asm}");
     assert!(asm.contains("OpCompositeInsert"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        if let Err(err) = tools::spirv_val_bytes(&spv, &tmp) {
-            panic!("spirv-val: {err}\n{asm}");
-        }
+    if let Err(err) = tools::spirv_val_bytes(&spv, &tmp) {
+        panic!("spirv-val: {err}\n{asm}");
     }
 }
 
@@ -8290,13 +7660,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
     assert!(asm.contains("OpImageRead"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
     assert!(!asm.contains("OpImageFetch"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -8339,13 +7703,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
     assert!(asm.contains("OpImageQuerySize "), "{asm}");
     assert!(!asm.contains("OpImageQuerySizeLod"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -8384,13 +7742,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
     let asm = disassemble(&spv).expect("disassemble");
     assert!(!asm.contains("OpImageQueryLevels"), "{asm}");
     assert!(asm.contains("OpImageWrite"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -8419,13 +7771,7 @@ declare void @air.fence_texture_2d(ptr addrspace(1))
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpMemoryBarrier"), "{asm}");
     assert!(!asm.contains("air.fence_texture"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]

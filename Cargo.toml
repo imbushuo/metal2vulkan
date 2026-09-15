@@ -53,8 +53,12 @@ path = "src/lib.rs"
 [dependencies]
 # Grammar-derived SPIR-V enums at the locked 1.4.341 revision.
 spirv = "0.4.0"
-# Bound every external-tool spawn (llvm-dis / spirv-val / …) so a stuck tool cannot hang us.
-wait-timeout = "0.2"
+# Compile and statically link the full SPIRV-Tools assembler/validator.
+spirv-tools = { version = "=0.13.3", default-features = false, features = ["use-compiled-tools"] }
+# Pin the vendored native sources too: validation semantics are part of the product fingerprint.
+spirv-tools-sys = { version = "=0.13.3", default-features = false, features = ["use-compiled-tools"] }
+# Load LLVM's stable C API lazily; textual input does not require an LLVM installation.
+libloading = "0.8.9"
 # Optional: persistable ShaderReflection + CLI `--emit-meta` JSON.
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }

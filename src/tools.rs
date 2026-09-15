@@ -1,39 +1,19 @@
-//! External-tool runners for metal2vulkan. Production SPIR-V emission is native Rust; the remaining
-//! spawns (`llvm-dis` and `spirv-val`) are bounded by a timeout so a stuck tool can't hang the
-//! translator.
+//! In-process shader tools: shared-library LLVM I/O and statically linked SPIRV-Tools.
+//!
+//! Translation never launches a tool executable. Callers needing hard time/memory isolation must
+//! run the entire translation in their own worker process; native calls cannot be safely cancelled.
+
+mod llvm;
 
 use crate::native;
+use spirv_tools::assembler::Assembler;
+use spirv_tools::val::Validator;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::Duration;
 
-/// Hard cap on any single external-tool invocation.
-pub const TOOL_TIMEOUT_SECS: u64 = 60;
-
-/// Marker substring every timeout error carries, so callers can tell a TIMEOUT (the tool was
-/// starved/killed before producing a verdict) apart from a real non-zero-exit failure.
-pub const TIMEOUT_MARKER: &str = "timed out after";
-
-/// Marker substring an error carries when the tool did NOT render a verdict — it was killed by a
-/// signal (e.g. the OS OOM-killer under concurrent memory pressure) or could not be spawned at all
-/// (a transient `fork` EAGAIN under heavy load). Like a timeout, this is NOT a clean non-zero-exit
-/// failure: the tool never decided. Callers that treat the tool's exit as a verdict (spirv-val
-/// validity) MUST retry a no-verdict rather than reading it as a real failure, or the result becomes
-/// nondeterministic (a valid module dropped as a false failure whenever its validator was killed).
-pub const NO_VERDICT_MARKER: &str = "no verdict";
-
-/// Global bound on the number of spirv-val subprocesses running at once, INDEPENDENT of the emit
-/// parallelism (`multi-threaded validation runs`). Validation is memory-heavy — the huge Apple
-/// BVH-builder modules make spirv-val allocate hundreds of MB — so spawning one validator per gate
-/// worker exhausts RAM on a constrained host and the OS OOM-killer terminates spirv-val mid-run. A
-/// signal-kill renders NO verdict; while [`spirv_val`]'s escalating-cap loop retries a NO_VERDICT,
-/// sustained memory pressure keeps every attempt killed, so a genuinely valid module is ultimately
-/// reported as a false validation failure. Bounding concurrent
-/// validators keeps peak memory under the ceiling so each one actually renders its verdict, making the
-/// floor a pure function of the bytes regardless of `--threads`. The cap is small by default (3) and
-/// overridable with `METAL2VULKAN_VAL_PAR`; emit stays fully parallel, only the validator spawns serialize.
+/// Bound concurrent memory-heavy validators independently of emission parallelism. Contexts are
+/// per-call, not shared across threads. The operational cap does not alter the validation rules.
 fn val_gate() -> &'static (Mutex<usize>, Condvar) {
     static GATE: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
     GATE.get_or_init(|| (Mutex::new(0usize), Condvar::new()))
@@ -43,7 +23,7 @@ fn val_par_limit() -> usize {
     crate::env_vars::val_par()
 }
 
-/// RAII permit for a concurrent spirv-val slot — blocks until one of [`val_par_limit`] slots is free,
+/// RAII permit for a concurrent validator slot — blocks until one of [`val_par_limit`] slots is free,
 /// releasing it (and waking a waiter) on drop.
 struct ValPermit;
 impl ValPermit {
@@ -67,100 +47,6 @@ impl Drop for ValPermit {
     }
 }
 
-/// Run a tool with the default [`TOOL_TIMEOUT_SECS`] cap. See [`run_with_timeout`].
-pub fn run(cmd: &str, args: &[&str]) -> Result<(Vec<u8>, Vec<u8>), String> {
-    run_with_timeout(cmd, args, TOOL_TIMEOUT_SECS)
-}
-
-/// Run a tool with an explicit timeout (seconds); return `(stdout, stderr)` on success, or
-/// `Err(message)` on failure/timeout. Drains stdout/stderr on threads so large output can't
-/// deadlock the pipe. A timeout error contains [`TIMEOUT_MARKER`].
-pub fn run_with_timeout(
-    cmd: &str,
-    args: &[&str],
-    timeout_secs: u64,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    use std::io::Read;
-    use std::process::Stdio;
-    use wait_timeout::ChildExt;
-
-    let bin = tool_bin(cmd);
-    let mut child = Command::new(&bin)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        // A failed spawn under heavy load is usually transient (`fork` EAGAIN when the process/
-        // thread table is saturated), NOT a missing tool — tag it NO_VERDICT so a validity caller
-        // retries rather than reading it as "invalid".
-        .map_err(|e| {
-            format!(
-                "cannot run {cmd} ({}) [{NO_VERDICT_MARKER}]: {e}",
-                bin.display()
-            )
-        })?;
-    let mut so = child.stdout.take().unwrap();
-    let mut se = child.stderr.take().unwrap();
-    let to = std::thread::spawn(move || {
-        let mut v = Vec::new();
-        let _ = so.read_to_end(&mut v);
-        v
-    });
-    let te = std::thread::spawn(move || {
-        let mut v = Vec::new();
-        let _ = se.read_to_end(&mut v);
-        v
-    });
-    match child.wait_timeout(Duration::from_secs(timeout_secs)) {
-        Ok(Some(status)) => {
-            let out = to.join().unwrap_or_default();
-            let err = te.join().unwrap_or_default();
-            if status.success() {
-                Ok((out, err))
-            } else if status.code().is_none() {
-                // No exit code => the tool was terminated by a signal (on Unix), e.g. the OS
-                // OOM-killer under concurrent memory pressure. It never rendered a verdict, so tag
-                // NO_VERDICT: a validity caller must retry, not treat this as a real failure. A
-                // genuinely-invalid input, by contrast, makes the tool EXIT (a code) in ms.
-                Err(format!(
-                    "{cmd} killed by signal [{NO_VERDICT_MARKER}]:\n{}",
-                    String::from_utf8_lossy(&err)
-                ))
-            } else {
-                Err(format!("{cmd} failed:\n{}", String::from_utf8_lossy(&err)))
-            }
-        }
-        Ok(None) => {
-            let _ = child.kill();
-            let _ = to.join();
-            let _ = te.join();
-            Err(format!("{cmd} {TIMEOUT_MARKER} {timeout_secs}s -- killed"))
-        }
-        Err(e) => {
-            let _ = child.kill();
-            Err(format!("waiting on {cmd} [{NO_VERDICT_MARKER}]: {e}"))
-        }
-    }
-}
-
-fn tool_bin(cmd: &str) -> PathBuf {
-    if let Some(path) = crate::env_vars::tool_path_override(cmd) {
-        return PathBuf::from(path);
-    }
-    for dir in [
-        "/opt/homebrew/opt/llvm/bin",
-        "/usr/local/opt/llvm/bin",
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-    ] {
-        let candidate = Path::new(dir).join(cmd);
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from(cmd)
-}
-
 /// Vulkan SPIR-V triple the sanitizer rewrites AIR modules to.
 /// Baseline Vulkan environment every emitted module must satisfy. Higher-version paths may be
 /// offered separately, but must retain a faithful fallback to this contract.
@@ -180,22 +66,44 @@ pub fn air_to_sanitized_ll(src: &str, tmp: &Path) -> Result<String, String> {
 /// [`air_to_sanitized_ll`].
 pub fn air_to_sanitized_ll_with_datalayout(
     src: &str,
-    tmp: &Path,
+    _tmp: &Path,
 ) -> Result<(String, Option<String>), String> {
     let ll_text = if src.ends_with(".ll") {
         std::fs::read_to_string(src).map_err(|e| format!("read {src}: {e}"))?
     } else {
-        let ll = scratch_file(tmp, "k", "ll");
-        let text = (|| {
-            run("llvm-dis", &[src, "-o", ll.to_str().unwrap()])?;
-            std::fs::read_to_string(&ll).map_err(|e| format!("read {}: {e}", ll.display()))
-        })();
-        // Intermediate only needed for llvm-dis → read; drop even on tool/read failure.
-        let _ = std::fs::remove_file(&ll);
-        text?
+        let bytes = std::fs::read(src).map_err(|e| format!("read {src}: {e}"))?;
+        llvm_disassemble(&bytes)?
     };
 
     Ok(sanitize_ll_text_with_datalayout(&ll_text))
+}
+
+/// Disassemble AIR/LLVM bitcode in memory using LLVM's shared library, loaded on first use.
+/// Both raw bitcode and the LLVM bitcode wrapper used by AIR are accepted.
+pub fn llvm_disassemble(bitcode: &[u8]) -> Result<String, String> {
+    llvm::disassemble(bitcode)
+}
+
+/// Assemble and verify textual LLVM IR in memory, returning bitcode (the `llvm-as` operation).
+/// This is not needed for translating textual AIR through the native emitter.
+pub fn llvm_assemble(text: &str) -> Result<Vec<u8>, String> {
+    llvm::assemble(text)
+}
+
+/// Assemble SPIR-V text for Vulkan 1.2 with the linked SPIRV-Tools assembler.
+/// As with `spirv-as`, assembly is not validation; use [`spirv_val_bytes`] for the latter.
+pub fn spirv_assemble(text: &str) -> Result<Vec<u8>, String> {
+    let assembler = spirv_tools::assembler::compiled::CompiledAssembler::with_env(
+        spirv_tools::TargetEnv::Vulkan_1_2,
+    );
+    let binary = assembler
+        .assemble(text, Default::default())
+        .map_err(|error| format!("spirv-as failed:\n{error}"))?;
+    Ok(binary
+        .as_words()
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect())
 }
 
 /// Sanitize LLVM IR text that is already in `.ll` form.
@@ -378,80 +286,29 @@ pub(crate) fn emit_vulkan_spirv_all_buffers_raw_bda_with_sidecar(
     )
 }
 
-/// Validate SPIR-V bytes against the Vulkan 1.2 baseline. Returns `Ok(())` if valid.
-///
-/// A spirv-val TIMEOUT is NOT a validation verdict — it means the validator was killed (starved by
-/// CPU saturation) before it could decide. Under a parallel gate run, a starved spirv-val on a large
-/// module exceeds the wall-clock cap, and treating that as "invalid" would falsely reject a module
-/// that is in fact valid.
-/// So a timeout is retried with an escalating cap (which also lets contending workers drain); only a
-/// real spirv-val FAILURE (a clean non-zero exit carrying validation errors) is returned. Determinism:
-/// the verdict is a pure function of the bytes, so the retry never changes a real result — it only
-/// converts a starvation timeout into the true verdict.
+/// Read and validate a SPIR-V file against Vulkan 1.2 using the linked validator.
 pub fn spirv_val(spv_path: &str) -> Result<(), String> {
-    // Bound concurrent validators so memory-heavy spirv-val runs are not OOM-killed under a parallel
-    // gate (see [`val_gate`]). Held across the whole escalating-cap loop so the in-flight validator
-    // count never exceeds the limit. Byte-neutral / verdict-neutral: serializing spawns cannot change
-    // what spirv-val decides, only whether it lives long enough to decide.
+    let bytes = std::fs::read(spv_path).map_err(|error| format!("read {spv_path}: {error}"))?;
+    spirv_val_bytes(&bytes, Path::new(""))
+}
+
+/// Validate in-memory SPIR-V against Vulkan 1.2, without scratch files or subprocesses.
+/// `tmp` is retained for source compatibility and is not accessed.
+pub fn spirv_val_bytes(spv: &[u8], _tmp: &Path) -> Result<(), String> {
     let _permit = ValPermit::acquire();
-    let args = ["--target-env", VULKAN_TARGET_ENV, spv_path];
-    // Escalating wall-clock caps. A spirv-val TIMEOUT is not a verdict (the validator was
-    // CPU-starved before deciding); only a clean non-zero exit is a real FAILURE. Critically,
-    // an INVALID module fails FAST — spirv-val reports the first error and exits in milliseconds,
-    // never consuming the cap — so a large *final* cap can only ever be spent confirming a module
-    // that is in fact VALID. That makes the floor DETERMINISTIC: a translator-valid module is
-    // never dropped as a starvation false-failure regardless of host contention / --threads. The
-    // earlier short caps let contending workers drain first; the 600s tail is the safety net for
-    // the heaviest valid modules under extreme oversubscription. (Measured: --threads 3 on this
-    // 8-core box flaked ~4 cfg/PSB retry cases between identical runs at the old 240s tail.)
-    const CAPS_SECS: [u64; 4] = [60, 120, 240, 600];
-    for (i, &cap) in CAPS_SECS.iter().enumerate() {
-        let last = i + 1 == CAPS_SECS.len();
-        match run_with_timeout("spirv-val", &args, cap) {
-            Ok(_) => return Ok(()),
-            // A TIMEOUT or a NO_VERDICT (signal-kill / spawn-failure) means spirv-val never decided
-            // — the validator was starved or OOM-killed under concurrency, not the module rejected.
-            // Retry with a larger cap (which also lets contending workers drain). Only a clean
-            // non-zero EXIT is a real INVALID verdict, and an invalid module produces that in ms, so
-            // the escalating retries never loop on a genuinely-invalid input. This makes the verdict
-            // a pure function of the bytes: a valid module is never dropped as a false failure just
-            // because its validator was killed (which otherwise flakes the measured floor).
-            Err(e) if (e.contains(TIMEOUT_MARKER) || e.contains(NO_VERDICT_MARKER)) && !last => {
-                continue
-            }
-            Err(e) => return Err(e),
-        }
+    if !spv.len().is_multiple_of(4) {
+        return Err("spirv-val failed:\nSPIR-V byte length is not a multiple of four".into());
     }
-    unreachable!("CAPS_SECS is non-empty")
-}
-
-/// Validate in-memory SPIR-V bytes by writing them to a temp file and invoking `spirv-val`.
-pub fn spirv_val_bytes(spv: &[u8], tmp: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(tmp).map_err(|e| format!("spirv_val_bytes create tmp: {e}"))?;
-    let path = scratch_file(tmp, "a2v_val", "spv");
-    std::fs::write(&path, spv).map_err(|e| format!("spirv_val_bytes write: {e}"))?;
-    let result = spirv_val(path.to_str().ok_or("spirv_val_bytes: bad tmp path")?);
-    // spirv-val only needs the path for the subprocess lifetime.
-    let _ = std::fs::remove_file(&path);
-    result
-}
-
-/// A scratch path inside `tmp` that no other caller can be using.
-///
-/// `tmp` is caller-supplied and callers do share one: parallel tests, a sweep's worker threads, and
-/// separate processes pointed at the same directory. A fixed file name there is shared mutable
-/// state -- one caller overwrites another's input and then deletes it, and the external tool
-/// reports on a file that is not the one the caller asked about, or on no file at all. That
-/// surfaces as a tool failure in an input that is fine, which is a false alarm the reader cannot
-/// tell from a real one. Naming the file after this process and this call removes the sharing
-/// instead of asking every caller to remember to pass a private directory.
-fn scratch_file(tmp: &Path, stem: &str, extension: &str) -> PathBuf {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    tmp.join(format!(
-        "{stem}_{}_{}.{extension}",
-        std::process::id(),
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ))
+    // A byte slice need not be aligned. Decode explicitly rather than casting it to u32.
+    let words: Vec<u32> = spv
+        .chunks_exact(4)
+        .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("four-byte chunk")))
+        .collect();
+    let validator =
+        spirv_tools::val::compiled::CompiledValidator::with_env(spirv_tools::TargetEnv::Vulkan_1_2);
+    validator
+        .validate(&words, None)
+        .map_err(|error| format!("spirv-val failed:\n{error}"))
 }
 
 /// Best-effort filename stem (drop the final extension).
@@ -473,9 +330,6 @@ mod tests {
     /// fine; that is a false alarm the reader has no way to tell from a real one.
     #[test]
     fn concurrent_validations_sharing_one_scratch_directory_do_not_collide() {
-        if Command::new("spirv-val").arg("--version").output().is_err() {
-            return;
-        }
         let module = crate::translate_sanitized_native(
             r#"
 define void @k(ptr addrspace(1) %out) {
@@ -507,6 +361,10 @@ entry:
                             .expect("a valid module validates, whoever else is validating");
                     }
                 });
+                assert!(
+                    !shared.exists(),
+                    "in-memory validation must not create scratch files"
+                );
             }
         });
         let _ = std::fs::remove_dir_all(&shared);

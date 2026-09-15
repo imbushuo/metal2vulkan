@@ -8735,7 +8735,7 @@ mod tests {
     }
 
     #[test]
-    fn owned_pointer_check_matches_vulkan_validation() {
+    fn owned_pointer_check_covers_the_linked_validators_logical_null_gap() {
         let valid = module_with_blocks(vec![block(50, vec![inst(Op::Return, vec![])])]);
         let invalid = module_with_composite_instruction(Instruction::new(
             Op::ConstantNull,
@@ -8779,8 +8779,9 @@ mod tests {
         let validation = crate::tools::spirv_val_bytes(&bytes(&invalid), &tmp);
         let _ = std::fs::remove_dir(&tmp);
         assert!(
-            validation.is_err(),
-            "spirv-val must reject a Logical-addressing pointer null"
+            validation.is_ok(),
+            "the pinned SPIRV-Tools accepts this Logical pointer null; the owned rejection \
+             above must remain until the linked validator also covers it: {validation:?}"
         );
     }
 
@@ -9109,20 +9110,10 @@ mod tests {
         );
     }
 
-    /// The owned derivative check is the ONLY thing that rejects this module.
-    ///
-    /// Every sibling in this family names a rule `spirv-val` also enforces, so the owned check is a
-    /// faster diagnosis of a failure the validator would catch anyway. This one is not. Before
-    /// SPIR-V 1.6 and `SPV_KHR_compute_shader_derivatives` a derivative instruction is valid only
-    /// under the Fragment execution model, and a Vulkan 1.2 target has neither -- but measured
-    /// against SPIRV-Tools v2026.3, `spirv-val` accepts `OpFwidth` reachable from a `GLCompute`
-    /// entry point under every target environment from `vulkan1.0` through `vulkan1.3`. The
-    /// assertion here is therefore the opposite of its siblings': it pins the validator's silence,
-    /// so that the day the gap closes this test says so rather than the owned check quietly becoming
-    /// redundant. What the owned check rejects is covered by
-    /// `owned_module_rejects_derivatives_from_non_fragment_call_trees` above.
+    /// The pinned linked validator also rejects the missing compute-derivative execution mode.
+    /// The owned check remains the structural diagnosis before final validation.
     #[test]
-    fn owned_derivative_execution_model_check_is_not_backed_by_vulkan_validation() {
+    fn owned_derivative_execution_model_check_matches_linked_validation() {
         let module = module_with_composite_instruction(Instruction::new(
             Op::Fwidth,
             Some(15),
@@ -9145,10 +9136,8 @@ mod tests {
         let validation = crate::tools::spirv_val_bytes(&bytes, &tmp);
         let _ = std::fs::remove_dir(&tmp);
         assert!(
-            validation.is_ok(),
-            "spirv-val now rejects a derivative reachable from GLCompute, so the owned check has a \
-             second line of defence behind it; say so here rather than leaving this note stale: \
-             {validation:?}"
+            validation.is_err(),
+            "linked SPIRV-Tools must reject a compute derivative without its execution mode"
         );
     }
 

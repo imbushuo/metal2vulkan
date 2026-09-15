@@ -10,17 +10,16 @@ use metal2vulkan_validation::air::stage_entry_from_ll;
 use metal2vulkan_validation::hash::sha256_bytes;
 use metal2vulkan_validation::library_module::{self, LibraryModuleRow};
 use metal2vulkan_validation::source::{self, SourceRow};
+use metal2vulkan_validation::worker;
 use metal2vulkan_validation::ScratchDir;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
-use wait_timeout::ChildExt as _;
+use std::time::Instant;
 
 const PROGRAM: &str = "corpus-harvest";
 const DEFAULT_MAX_AIR_BYTES: usize = 1024 * 1024;
-const DEFAULT_LLVM_DIS_TIMEOUT: Duration = Duration::from_secs(60);
 const AIR_WRAP: &[u8; 4] = b"\xde\xc0\x17\x0b";
 
 #[derive(Debug)]
@@ -31,9 +30,7 @@ struct Options {
     start_set: StartSet,
     include_apps: bool,
     metallibs: Vec<PathBuf>,
-    llvm_dis: Option<PathBuf>,
     max_air_bytes: usize,
-    llvm_dis_timeout: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +79,13 @@ struct HarvestStats {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--disassembly-worker") {
+        if let Err(error) = run_disassembly_worker() {
+            eprintln!("{PROGRAM}: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let Some(opts) = parse_args() else {
         return;
     };
@@ -117,7 +121,6 @@ fn parse_args() -> Option<Options> {
             .unwrap_or(StartSet::System),
         include_apps: false,
         metallibs: Vec::new(),
-        llvm_dis: None,
         max_air_bytes: env_max
             .as_deref()
             .filter(|s| !s.is_empty())
@@ -125,7 +128,6 @@ fn parse_args() -> Option<Options> {
             .transpose()
             .unwrap_or_else(|e| fatal(&e))
             .unwrap_or(DEFAULT_MAX_AIR_BYTES),
-        llvm_dis_timeout: DEFAULT_LLVM_DIS_TIMEOUT,
     };
 
     let mut args = std::env::args().skip(1);
@@ -161,23 +163,11 @@ fn parse_args() -> Option<Options> {
                         .unwrap_or_else(|| fatal("--metallib requires path")),
                 ));
             }
-            "--llvm-dis" => {
-                opts.llvm_dis = Some(PathBuf::from(
-                    args.next()
-                        .unwrap_or_else(|| fatal("--llvm-dis requires path")),
-                ));
-            }
             "--max-air-bytes" => {
                 let n = args
                     .next()
                     .unwrap_or_else(|| fatal("--max-air-bytes requires N"));
                 opts.max_air_bytes = parse_usize_arg("--max-air-bytes", &n);
-            }
-            "--llvm-dis-timeout-secs" => {
-                let seconds = args
-                    .next()
-                    .unwrap_or_else(|| fatal("--llvm-dis-timeout-secs requires N"));
-                opts.llvm_dis_timeout = parse_timeout_arg(&seconds);
             }
             other if other.starts_with("--out=") => {
                 opts.out = PathBuf::from(other.trim_start_matches("--out="));
@@ -199,17 +189,14 @@ fn parse_args() -> Option<Options> {
                 opts.metallibs
                     .push(PathBuf::from(other.trim_start_matches("--metallib=")));
             }
-            other if other.starts_with("--llvm-dis=") => {
-                opts.llvm_dis = Some(PathBuf::from(other.trim_start_matches("--llvm-dis=")));
-            }
             other if other.starts_with("--max-air-bytes=") => {
                 let n = other.trim_start_matches("--max-air-bytes=");
                 opts.max_air_bytes = parse_usize_arg("--max-air-bytes", n);
             }
-            other if other.starts_with("--llvm-dis-timeout-secs=") => {
-                opts.llvm_dis_timeout =
-                    parse_timeout_arg(other.trim_start_matches("--llvm-dis-timeout-secs="));
-            }
+            other if other.starts_with("--llvm-dis") => fatal(
+                "external llvm-dis options were removed; use METAL2VULKAN_LLVM_LIBRARY. \
+                 Disassembly workers have fixed 20-second/500-MiB limits",
+            ),
             other => fatal(&format!("unknown arg: {other}")),
         }
     }
@@ -225,15 +212,15 @@ fn print_usage() {
     eprintln!(
         "usage: {PROGRAM} [--out DIR] [--limit N] [--offset N]\n\
                 \t\t[--start-set system|apps|all] [--include-apps]\n\
-                \t\t[--metallib PATH ...] [--llvm-dis PATH]\n\
-                \t\t[--max-air-bytes N] [--llvm-dis-timeout-secs N]\n\
+                \t\t[--metallib PATH ...] [--max-air-bytes N]\n\
          \n\
          DIR is the corpus root. Harvests metallib AIR directly into\n\
          DIR/local/sources/shard_NNN.jsonl.\n\
          No local/air, local/metallib, local/ledger, or local/tmp\n\
          intermediates are retained. Environment defaults: METAL2VULKAN_HARVEST_LIMIT,\n\
          METAL2VULKAN_HARVEST_OFFSET, METAL2VULKAN_HARVEST_START_SET,\n\
-         METAL2VULKAN_HARVEST_MAX_AIR_BYTES, METAL2VULKAN_LLVM_DIS."
+         METAL2VULKAN_HARVEST_MAX_AIR_BYTES, METAL2VULKAN_LLVM_LIBRARY.\n\
+         LLVM runs in this executable's isolated workers (20 seconds / 500 MiB), not llvm-dis."
     );
 }
 
@@ -245,14 +232,6 @@ fn parse_usize_env(s: &str) -> Result<usize, String> {
 fn parse_usize_arg(flag: &str, s: &str) -> usize {
     s.parse::<usize>()
         .unwrap_or_else(|e| fatal(&format!("bad {flag} {s:?}: {e}")))
-}
-
-fn parse_timeout_arg(value: &str) -> Duration {
-    let seconds = parse_usize_arg("--llvm-dis-timeout-secs", value);
-    if seconds == 0 {
-        fatal("--llvm-dis-timeout-secs must be greater than zero");
-    }
-    Duration::from_secs(seconds as u64)
 }
 
 fn fatal(msg: &str) -> ! {
@@ -271,14 +250,7 @@ fn run(opts: Options) -> i32 {
         return 1;
     }
 
-    let llvm_dis = match resolve_llvm_dis(opts.llvm_dis.as_deref()) {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("{PROGRAM}: {e}");
-            return 1;
-        }
-    };
-    eprintln!("# llvm-dis  {}", llvm_dis.display());
+    eprintln!("# LLVM shared library in isolated {PROGRAM} workers");
 
     let (batch, total_found) = match select_metallibs(&opts) {
         Ok(v) => v,
@@ -313,14 +285,7 @@ fn run(opts: Options) -> i32 {
         }
     };
     for lib in batch {
-        harvest_one(
-            &lib,
-            &llvm_dis,
-            &opts,
-            &mut by_hash,
-            &mut library_modules,
-            &mut stats,
-        );
+        harvest_one(&lib, &opts, &mut by_hash, &mut library_modules, &mut stats);
         // Dependency modules are deliberately retained independently. A stage-entry row can be
         // discarded only when SQLite already knows every parent-library membership observed in
         // this batch. Apply that filter after each library so a broad reharvest cannot accumulate
@@ -502,43 +467,6 @@ fn priority_key(path: &Path) -> (String, String) {
     (band.to_string(), s)
 }
 
-fn resolve_llvm_dis(explicit: Option<&Path>) -> Result<PathBuf, String> {
-    let mut candidates = Vec::<PathBuf>::new();
-    if let Some(path) = explicit {
-        candidates.push(path.to_path_buf());
-    }
-    if let Some(path) = std::env::var_os("METAL2VULKAN_LLVM_DIS") {
-        candidates.push(PathBuf::from(path));
-    }
-    candidates.push(PathBuf::from("/opt/homebrew/opt/llvm/bin/llvm-dis"));
-    candidates.push(PathBuf::from("/usr/local/opt/llvm/bin/llvm-dis"));
-    candidates.push(PathBuf::from("llvm-dis"));
-
-    for candidate in candidates {
-        if candidate.components().count() > 1 && candidate.is_file() {
-            return Ok(candidate);
-        }
-        if candidate.components().count() == 1 {
-            if let Some(found) = find_on_path(&candidate) {
-                return Ok(found);
-            }
-        }
-    }
-    Err("llvm-dis not found (pass --llvm-dis or set METAL2VULKAN_LLVM_DIS)".into())
-}
-
-fn find_on_path(name: &Path) -> Option<PathBuf> {
-    let name = name.to_str()?;
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
 struct HarvestIntermediateCleanup {
     out: PathBuf,
 }
@@ -595,7 +523,6 @@ fn cleanup_legacy_root_shards(out: &Path) {
 
 fn harvest_one(
     lib: &Path,
-    llvm_dis: &Path,
     opts: &Options,
     by_hash: &mut HashMap<String, SourceRow>,
     library_modules: &mut HashMap<String, LibraryModuleRow>,
@@ -616,18 +543,12 @@ fn harvest_one(
     let mut kept_for_lib = 0usize;
 
     for blob in blobs {
-        let raw_ll = match disassemble_air(
-            &blob.bytes,
-            llvm_dis,
-            &lib_sha,
-            blob.offset,
-            opts.llvm_dis_timeout,
-        ) {
+        let raw_ll = match disassemble_air(&blob.bytes, &lib_sha, blob.offset) {
             Ok(ll) => ll,
             Err(e) => {
                 stats.llvm_failed += 1;
                 eprintln!(
-                    "  FAIL llvm-dis {} off={} ({e})",
+                    "  FAIL LLVM disassembly {} off={} ({e})",
                     lib.display(),
                     blob.offset
                 );
@@ -757,13 +678,7 @@ fn extract_air_blobs(data: &[u8], max_air_bytes: usize, stats: &mut HarvestStats
     out
 }
 
-fn disassemble_air(
-    air: &[u8],
-    llvm_dis: &Path,
-    lib_sha: &str,
-    offset: usize,
-    timeout: Duration,
-) -> Result<String, String> {
+fn disassemble_air(air: &[u8], lib_sha: &str, offset: usize) -> Result<String, String> {
     let scratch = ScratchDir::new(&format!(
         "harvest-disassemble-{}-{offset}",
         lib_sha.get(..12).unwrap_or(lib_sha)
@@ -773,40 +688,47 @@ fn disassemble_air(
     let stdout_path = scratch.path().join("stdout.txt");
     let stderr_path = scratch.path().join("stderr.txt");
     fs::write(&in_air, air).map_err(|e| format!("write {}: {e}", in_air.display()))?;
-    let mut child = Command::new(llvm_dis)
-        .arg(&in_air)
-        .arg("-o")
-        .arg(&out_ll)
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("resolve {PROGRAM} executable: {error}"))?;
+    let mut command = Command::new(executable);
+    command
+        .arg("--disassembly-worker")
+        .arg(scratch.path())
         .stdout(Stdio::from(fs::File::create(&stdout_path).map_err(
             |error| format!("create {}: {error}", stdout_path.display()),
         )?))
         .stderr(Stdio::from(fs::File::create(&stderr_path).map_err(
             |error| format!("create {}: {error}", stderr_path.display()),
-        )?))
+        )?));
+    worker::configure_process_group(&mut command);
+    let started = Instant::now();
+    let mut child = command
         .spawn()
-        .map_err(|e| format!("spawn {}: {e}", llvm_dis.display()))?;
-    let status = child
-        .wait_timeout(timeout)
-        .map_err(|error| format!("wait for {}: {error}", llvm_dis.display()))?;
-    let Some(status) = status else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!(
-            "llvm-dis timed out after {} seconds",
-            timeout.as_secs_f64()
-        ));
-    };
+        .map_err(|error| format!("spawn {PROGRAM} disassembly worker: {error}"))?;
+    let status = worker::wait_bounded(&mut child, started)?;
     if status.success() && out_ll.is_file() {
         fs::read_to_string(&out_ll).map_err(|e| format!("read {}: {e}", out_ll.display()))
     } else {
-        let stdout = fs::read(&stdout_path).unwrap_or_default();
-        let stderr = fs::read(&stderr_path).unwrap_or_default();
+        let stdout =
+            fs::read(&stdout_path).map_err(|error| format!("read worker stdout: {error}"))?;
+        let stderr =
+            fs::read(&stderr_path).map_err(|error| format!("read worker stderr: {error}"))?;
         Err(format!(
-            "llvm-dis exited {status}: {}{}",
+            "LLVM disassembly worker exited {status}: {}{}",
             String::from_utf8_lossy(&stdout),
             String::from_utf8_lossy(&stderr)
         ))
     }
+}
+
+fn run_disassembly_worker() -> Result<(), String> {
+    let scratch = std::env::args_os()
+        .nth(2)
+        .ok_or("missing disassembly scratch path")?;
+    let scratch = Path::new(&scratch);
+    let bytes = fs::read(scratch.join("case.air")).map_err(|error| format!("read AIR: {error}"))?;
+    let text = metal2vulkan::tools::llvm_disassemble(&bytes)?;
+    fs::write(scratch.join("case.ll"), text).map_err(|error| format!("write LLVM IR: {error}"))
 }
 
 fn classify_module(ll: &str) -> Option<(String, String)> {
@@ -962,57 +884,5 @@ mod tests {
         assert!(source_memberships_already_indexed(&indexed, &hash, &row));
         row.lib_sha256s.push("bb".into());
         assert!(!source_memberships_already_indexed(&indexed, &hash, &row));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn disassembler_scratch_is_removed_on_success_failure_timeout_and_signal() {
-        use std::collections::HashSet;
-        use std::os::unix::fs::PermissionsExt as _;
-
-        fn scratch_paths() -> HashSet<PathBuf> {
-            fs::read_dir(std::env::temp_dir())
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|name| {
-                            name.starts_with("metal2vulkan-validation-")
-                                && name.contains("-harvest-disassemble-")
-                        })
-                })
-                .collect()
-        }
-
-        let outer = ScratchDir::new("harvest-disassembler-test").unwrap();
-        let tool = outer.path().join("llvm-dis.sh");
-        let baseline = scratch_paths();
-        for (script, timeout, succeeds) in [
-            (
-                "#!/bin/sh\nprintf 'define void @k() { ret void }' > \"$3\"\n",
-                Duration::from_secs(2),
-                true,
-            ),
-            ("#!/bin/sh\nexit 1\n", Duration::from_secs(2), false),
-            (
-                "#!/bin/sh\nexec sleep 2\n",
-                Duration::from_millis(30),
-                false,
-            ),
-            ("#!/bin/sh\nkill -TERM $$\n", Duration::from_secs(2), false),
-        ] {
-            fs::write(&tool, script).unwrap();
-            let mut permissions = fs::metadata(&tool).unwrap().permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&tool, permissions).unwrap();
-            assert_eq!(
-                disassemble_air(b"air", &tool, &"11".repeat(32), 0, timeout).is_ok(),
-                succeeds
-            );
-            assert_eq!(scratch_paths(), baseline);
-        }
     }
 }

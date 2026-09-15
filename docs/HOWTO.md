@@ -4,20 +4,22 @@ This guide takes one Metal AIR or sanitized LLVM-IR module from input bytes to a
 shader and the host state needed to use it. For the complete field-by-field reflection contract, see
 [Shader reflection for consumers](REFLECTION.md).
 
-## 1. Install the tools
+## 1. Install the native dependencies
 
-Product translation uses two external executables:
+Product translation calls native libraries in the same process; it launches no tool executables:
 
-- `llvm-dis` converts AIR bitcode to LLVM IR. It is not needed when the input is already textual
-  `.ll`.
-- `spirv-val` validates the single constructed output under the Vulkan 1.2 environment. Its verdict
-  cannot trigger a repair or select another representation.
+- LLVM's shared library converts AIR bitcode to LLVM IR. It is loaded lazily and is not needed
+  for textual `.ll` input.
+- Cargo compiles pinned SPIRV-Tools sources and statically links the assembler and full validator.
+  Validation still targets Vulkan 1.2; its verdict cannot trigger a repair or another representation.
 
-Put both tools on `PATH`, or set an absolute per-tool override:
+Building requires a C++17 compiler. Install LLVM (`brew install llvm` on macOS, or the Linux
+distribution's LLVM package) for bitcode input. The loader searches standard Linux library names
+(including versioned LLVM 15–23 sonames) and Homebrew's Intel/Apple Silicon locations.
+For a nonstandard installation, set an absolute library path before the first LLVM call:
 
 ```sh
-export METAL2VULKAN_LLVM_DIS=/path/to/llvm-dis
-export METAL2VULKAN_SPIRV_VAL=/path/to/spirv-val
+export METAL2VULKAN_LLVM_LIBRARY=/path/to/libLLVM.dylib # macOS; .so on Linux
 ```
 
 Install the CLI with reflection JSON enabled:
@@ -25,6 +27,15 @@ Install the CLI with reflection JSON enabled:
 ```sh
 cargo install metal2vulkan --features serde
 ```
+
+There is no executable fallback. `METAL2VULKAN_LLVM_DIS`, `METAL2VULKAN_SPIRV_VAL`, and the other
+former tool-path overrides no longer affect translation. `METAL2VULKAN_VAL_PAR` still bounds
+concurrent validations, now inside the process. `tools::llvm_disassemble`, `tools::llvm_assemble`,
+and `tools::spirv_assemble` expose the in-memory operations directly.
+
+Native-library calls cannot be safely cancelled in a thread. Applications needing hard limits
+should isolate the entire translation in their own worker process. Repository corpus workers
+enforce the 20-second/500-MiB boundary; the public library does not silently spawn workers.
 
 ## 2. Translate from the command line
 

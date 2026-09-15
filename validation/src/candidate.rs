@@ -273,35 +273,10 @@ fn pipeline_spv_sha256(modules: &[&[u8]]) -> String {
 }
 
 fn assemble_spvasm(assembly: &str, label: &str) -> Result<Vec<u8>, String> {
-    let scratch = ScratchDir::new(label)?;
-    let asm = scratch.path().join("module.spvasm");
-    let spv = scratch.path().join("module.spv");
-    std::fs::write(&asm, assembly).map_err(|error| format!("write {}: {error}", asm.display()))?;
-    let asm_path = asm
-        .to_str()
-        .ok_or_else(|| format!("{label} assembly path is not UTF-8"))?;
-    let spv_path = spv
-        .to_str()
-        .ok_or_else(|| format!("{label} output path is not UTF-8"))?;
-    metal2vulkan::tools::run(
-        "spirv-as",
-        &[
-            "--target-env",
-            metal2vulkan::tools::VULKAN_TARGET_ENV,
-            asm_path,
-            "-o",
-            spv_path,
-        ],
-    )?;
-    let bytes = std::fs::read(&spv).map_err(|error| format!("read {}: {error}", spv.display()))?;
-    metal2vulkan::tools::run(
-        "spirv-val",
-        &[
-            "--target-env",
-            metal2vulkan::tools::VULKAN_TARGET_ENV,
-            spv_path,
-        ],
-    )?;
+    let bytes = metal2vulkan::tools::spirv_assemble(assembly)
+        .map_err(|error| format!("{label}: {error}"))?;
+    metal2vulkan::tools::spirv_val_bytes(&bytes, Path::new(""))
+        .map_err(|error| format!("{label}: {error}"))?;
     Ok(bytes)
 }
 
@@ -4207,28 +4182,7 @@ mod platform {
     }
 
     pub(super) fn assemble_initializer(assembly: &str) -> Result<Vec<u8>, String> {
-        let scratch = crate::ScratchDir::new("multisample-initializer")?;
-        let asm = scratch.path().join("initializer.spvasm");
-        let spv = scratch.path().join("initializer.spv");
-        std::fs::write(&asm, assembly)
-            .map_err(|error| format!("write {}: {error}", asm.display()))?;
-        let asm = asm
-            .to_str()
-            .ok_or_else(|| "multisample initializer path is not UTF-8".to_string())?;
-        let spv_path = spv
-            .to_str()
-            .ok_or_else(|| "multisample initializer output path is not UTF-8".to_string())?;
-        metal2vulkan::tools::run(
-            "spirv-as",
-            &[
-                "--target-env",
-                metal2vulkan::tools::VULKAN_TARGET_ENV,
-                asm,
-                "-o",
-                spv_path,
-            ],
-        )?;
-        std::fs::read(&spv).map_err(|error| format!("read {}: {error}", spv.display()))
+        super::assemble_spvasm(assembly, "multisample initializer")
     }
 
     struct MultisampleInitObjects {

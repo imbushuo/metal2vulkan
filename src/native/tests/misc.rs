@@ -511,13 +511,7 @@ entry:
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpUDiv"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -588,13 +582,7 @@ declare i1 @air.is_function_constant_defined(ptr addrspace(2))
         "definedness specialization marker should survive lowering: {asm}"
     );
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -799,13 +787,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
     assert!(asm.contains("OpStore"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
     assert!(!asm.contains("llvm.memset"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -855,13 +837,7 @@ declare void @llvm.memset.p3.i64(ptr addrspace(3), i8, i64, i1)
         .iter()
         .flat_map(|word| word.to_le_bytes())
         .collect::<Vec<_>>();
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -899,13 +875,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
     assert_eq!(asm.matches("OpStore").count(), 14, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
     assert!(!asm.contains("llvm.memset"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -942,13 +912,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
     assert_eq!(asm.matches("OpStore").count(), 6, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
     assert!(!asm.contains("llvm.memset"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -986,13 +950,7 @@ declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
     let asm = disassemble(&out).expect("disassemble transformed");
     assert_eq!(asm.matches("OpCopyMemory").count(), 12, "{asm}");
     assert!(!asm.contains("llvm.memcpy"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1030,13 +988,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
     let asm = disassemble(&out).expect("disassemble transformed");
     assert_eq!(asm.matches("OpStore").count(), 1, "{asm}");
     assert!(!asm.contains("llvm.memset"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1070,13 +1022,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
     assert_eq!(asm.matches("OpStore").count(), 2, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
     assert!(!asm.contains("llvm.memset"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 /// A shader that encodes into an indirect command buffer must not translate to one that does not.
@@ -1195,13 +1141,7 @@ declare { float, i8 } @air.read_depth_2d_array.f32(ptr addrspace(1), ptr addrspa
         ),
         "arrayed 2D depth fetch coord must be a 3-component vector (x, y, layer)\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]

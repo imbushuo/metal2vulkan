@@ -56,13 +56,7 @@ declare i16 @air.popcount.i16(i16)
         .expect("OpBitCount");
     assert!(bitcount.contains(&uint32_type_id(&asm)), "{asm}");
     assert!(asm.contains("Flat"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -94,13 +88,7 @@ entry:
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
     assert!(!asm.contains("OpBitcast"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -129,13 +117,7 @@ entry:
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpSpecConstantComposite"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -182,13 +164,7 @@ declare void @air.simdgroup.barrier(i32, i32)
     assert_eq!(asm.matches("OpGroupNonUniformShuffle").count(), 2, "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
     assert!(asm.contains("OpControlBarrier"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -231,13 +207,7 @@ declare float @air.quad_sum.f32(float)
         "{asm}"
     );
     assert_eq!(asm.matches("OpFAdd").count(), 2, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -284,13 +254,7 @@ declare i32 @air.quad_min.u.i32(i32)
     assert_eq!(asm.matches("OpULessThan").count(), 2, "{asm}");
     assert!(!asm.contains("OpGroupNonUniformUMax"), "{asm}");
     assert!(!asm.contains("OpGroupNonUniformUMin"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -358,13 +322,7 @@ declare i1 @air.simd_is_first()
     assert!(asm.contains("BuiltIn SubgroupLocalInvocationId"), "{asm}");
     assert!(asm.contains("OpBitwiseAnd"), "{asm}");
     assert!(asm.contains("OpIEqual"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -403,13 +361,7 @@ declare i1 @air.quad_is_first()
             .any(|line| line.contains("OpConstant") && line.trim_end().ends_with(" 3")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -450,13 +402,7 @@ declare i1 @air.quad_all(i1)
         "{asm}"
     );
     assert!(asm.contains("OpBitwiseAnd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -496,13 +442,7 @@ declare i1 @air.quad_any(i1)
         "{asm}"
     );
     assert!(asm.contains("OpBitwiseOr"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -551,13 +491,7 @@ declare i1 @air.simd_all(i1)
     assert!(!asm.contains("OpGroupNonUniformAll"), "{asm}");
     assert!(!asm.contains("OpCapability GroupNonUniformVote"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -598,13 +532,7 @@ declare i64 @air.simd_ballot.i64(i1)
     assert!(!asm.contains("OpShiftLeftLogical"), "{asm}");
     assert!(!asm.contains("OpBitwiseOr"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -643,13 +571,7 @@ declare i16 @air.get_simdgroup_size.i16()
         !asm.contains("air.get_simdgroup_size"),
         "intrinsic call survived lowering:\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// `simd_shuffle_and_fill_up` picks data vs fill by comparing the in-cluster lane against the
@@ -774,13 +696,7 @@ declare half @air.simd_shuffle_and_fill_down.f16(half, half, i16, i16)
         !asm.contains("air.simd_shuffle_and_fill_down"),
         "intrinsic call survived lowering:\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -825,13 +741,7 @@ declare float @air.simd_broadcast.f32(float, i16)
     // `simd_shuffle_down` is checked for below.
     assert!(asm.contains("SubgroupLocalInvocationId"), "{asm}");
     assert!(asm.contains("OpBitwiseAnd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -866,13 +776,7 @@ declare float @air.simd_shuffle.f32(float, i16)
     assert!(asm.contains("SubgroupLocalInvocationId"), "{asm}");
     assert!(asm.contains("OpBitwiseAnd"), "{asm}");
     assert!(asm.contains("OpIAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -934,13 +838,7 @@ declare float @air.simd_shuffle.f32(float, i16)
             "lane {lane} is not an OpIAdd result\n{asm}"
         );
     }
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -988,13 +886,7 @@ declare half @air.simd_shuffle_down.f16(half, i16)
     assert!(asm.contains("OpBitwiseAnd"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1037,13 +929,7 @@ declare float @air.simd_shuffle_rotate_down.f32(float, i16)
     assert!(asm.contains("OpBitwiseAnd"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
     assert!(!asm.contains("air.simd_shuffle_rotate_down"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1087,13 +973,7 @@ declare i32 @air.simd_shuffle_up.u.i32(i32, i16)
     assert!(asm.contains("OpBitwiseAnd"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1134,13 +1014,7 @@ declare half @air.simd_shuffle_xor.f16(half, i16)
     );
     assert!(asm.contains("OpGroupNonUniformShuffleXor"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1180,13 +1054,7 @@ declare <4 x float> @air.quad_shuffle_down.v4f32(<4 x float>, i16)
         "{asm}"
     );
     assert!(asm.contains("OpUConvert"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1220,13 +1088,7 @@ declare float @air.simd_prefix_exclusive_sum.f32(float)
     );
     assert!(asm.contains("OpGroupNonUniformFAdd"), "{asm}");
     assert!(asm.contains("ExclusiveScan"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1260,13 +1122,7 @@ declare <4 x i16> @air.simd_prefix_exclusive_sum.u.v4i16(<4 x i16>)
     assert!(asm.contains("OpCapability Int16"), "{asm}");
     assert!(asm.contains("OpGroupNonUniformIAdd"), "{asm}");
     assert!(asm.contains("ExclusiveScan"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1310,13 +1166,7 @@ declare float @air.simd_sum.f32(float)
     );
     assert!(asm.contains("OpGroupNonUniformFAdd"), "{asm}");
     assert!(asm.contains("ClusteredReduce"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1360,13 +1210,7 @@ declare i8 @air.simd_or.u.i8(i8)
     assert!(asm.contains("OpCapability Int8"), "{asm}");
     assert!(asm.contains("OpGroupNonUniformBitwiseOr"), "{asm}");
     assert!(asm.contains("ClusteredReduce"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1410,13 +1254,7 @@ declare float @air.simd_max.f32(float)
     assert!(asm.contains("InclusiveScan"), "{asm}");
     assert!(asm.contains("OpGroupNonUniformFMin"), "{asm}");
     assert!(asm.contains("OpGroupNonUniformFMax"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// The `.s.`/`.u.` marker on a subgroup extrema decides the comparison, not the result type.
@@ -1464,13 +1302,7 @@ declare i16 @air.simd_max.s.i16(i16)
     assert!(asm.contains("OpGroupNonUniformSMax"), "{asm}");
     assert!(asm.contains("OpGroupNonUniformUMin"), "{asm}");
     assert!(!asm.contains("OpGroupNonUniformUMax"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1529,13 +1361,7 @@ entry:
             .any(|line| line.contains("OpConstant") && line.contains("2")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1583,13 +1409,7 @@ entry:
     assert!(!asm.contains("OpIMul"), "{asm}");
     assert_eq!(asm.matches("OpUGreaterThanEqual").count(), 1, "{asm}");
     assert!(!asm.contains("OpBranchConditional"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1971,13 +1791,7 @@ entry:
     );
     assert!(!asm.contains("DescriptorSet"), "{asm}");
     assert!(!asm.contains("Binding"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2081,13 +1895,7 @@ entry:
         });
     assert!(!direct_workgroup_load, "{asm}");
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// SPIRV-Cross emits a SPIR-V value with a single reader inline in the expression that reads it.
@@ -2171,13 +1979,7 @@ declare float @air.simd_shuffle_down.f32(float, i16)
                 .any(|operand| matches!(operand, Operand::IdRef(id) if shuffles.contains(id)))
         });
     assert!(!select_reads_a_shuffle, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// A `[[threadgroup(n)]]` buffer's `Workgroup` array is sized by the caller, because Metal binds
@@ -2521,13 +2323,7 @@ declare void @air.wg.barrier(i32, i32)
     assert!(asm.contains("OpControlBarrier"), "{asm}");
     // 584 = AcquireRelease | UniformMemory | CrossWorkgroupMemory.
     assert!(asm.contains(" 584"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2597,13 +2393,7 @@ declare i32 @air.atomic.local.or.u.i32(ptr addrspace(3), i32, i32, i32, i1)
     assert!(asm.contains("OpAtomicUMin"), "{asm}");
     assert!(asm.contains("OpAtomicAnd"), "{asm}");
     assert!(asm.contains("OpAtomicOr"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2657,13 +2447,7 @@ declare i32 @air.atomic.local.add.u.i32(ptr addrspace(3), i32, i32, i32, i1)
     assert!(!asm.contains("OpTypeStruct %uint"), "{asm}");
     assert_eq!(asm.matches("OpAtomicIAdd").count(), 4, "{asm}");
     assert!(!asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2700,13 +2484,7 @@ declare <64 x float> @air.simdgroup_matrix_8x8_multiply_accumulate.v64f32.v64f32
     assert!(asm.contains("OpTypeArray"), "{asm}");
     assert!(asm.contains("OpFMul"), "{asm}");
     assert!(asm.contains("OpFAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -2758,13 +2536,7 @@ declare <2 x half> @llvm.agx2.f16matmad4x4.v2f16(<2 x half>, <2 x half>, <2 x ha
         "{asm}"
     );
     assert_eq!(asm.matches(" Fma ").count(), 48, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -2812,13 +2584,7 @@ declare <8 x i32> @air.simdgroup_matrix_16x16x16_widening_multiply_accumulate.s.
     assert!(asm.contains("OpUConvert"), "{asm}");
     assert!(asm.contains("OpIMul"), "{asm}");
     assert!(asm.contains(" Fma "), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -2854,13 +2620,7 @@ declare <8 x i32> @llvm.agx3.igemm.v8i32.i64.i64.v8i32(i8, i8, i8, i16, i64, i16
     assert!(asm.contains("OpSConvert"), "{asm}");
     assert!(asm.contains("OpIMul"), "{asm}");
     assert!(asm.contains("OpIAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -2906,13 +2666,7 @@ declare <8 x float> @air.simdgroup_matrix_16x16x16_multiply_accumulate.f.f.v8f32
     assert!(asm.contains("OpGroupNonUniformShuffle"), "{asm}");
     assert!(asm.contains("OpShiftLeftLogical"), "{asm}");
     assert!(asm.contains(" Ldexp "), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -2970,13 +2724,7 @@ declare void @air.simdgroup_matrix_8x8_store.v64f32.p1f32(<64 x float>, ptr addr
     // (no OpFMul over a 64-lane array type).
     assert!(!asm.contains("OpTypeVector %float 64"), "{asm}");
     assert!(asm.contains("OpTypeArray"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 /// A kernel's DECLARED `[[thread_index_in_simdgroup]]` names the same lane the shuffle beside it
@@ -3048,13 +2796,7 @@ declare i1 @air.simd_is_first()
             .any(|line| line.contains(" = OpLoad ") && line.trim_end().ends_with(&lane_var)),
         "the declared lane loads that variable\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -3071,13 +2813,7 @@ fn native_barrier_execution_scope_comes_from_the_operand_not_the_callee() {
         ));
         let _ = std::fs::create_dir_all(&tmp);
         let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
-        if std::process::Command::new("spirv-val")
-            .arg("--version")
-            .output()
-            .is_ok()
-        {
-            tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-        }
+        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
         let module = load_bytes(&spv).expect("load spv");
         let constants: HashMap<Word, u32> = module
             .types_global_values

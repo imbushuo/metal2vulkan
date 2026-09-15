@@ -107,7 +107,7 @@ pub enum FragRole {
     /// A texture argument the variant this module describes declares no slot for, so no descriptor
     /// exists for it. Metal reads zero through such a resource and stores nowhere; naming the role
     /// is what lets the lowering tell that operand apart from a handle it merely lost track of.
-    /// See [`variant_texture_slot`].
+    /// See the internal `variant_texture_slot` helper.
     VariantAbsentTexture,
     /// Anything we don't model.
     Other,
@@ -432,7 +432,7 @@ pub enum VertRole {
     /// A texture argument the variant this module describes declares no slot for, so no descriptor
     /// exists for it. Metal reads zero through such a resource and stores nowhere; naming the role
     /// is what lets the lowering tell that operand apart from a handle it merely lost track of.
-    /// See [`variant_texture_slot`].
+    /// See the internal `variant_texture_slot` helper.
     VariantAbsentTexture,
     Other,
 }
@@ -714,7 +714,7 @@ pub enum KernRole {
     /// A texture argument the variant this module describes declares no slot for, so no descriptor
     /// exists for it. Metal reads zero through such a resource and stores nowhere; naming the role
     /// is what lets the lowering tell that operand apart from a handle it merely lost track of.
-    /// See [`variant_texture_slot`].
+    /// See the internal `variant_texture_slot` helper.
     VariantAbsentTexture,
     Other,
 }
@@ -2652,10 +2652,9 @@ pub fn execution_group_role(marker: &str) -> Option<(ExecutionGroupFact, u32)> {
         (ExecutionGroupFact::GroupIndexInThreadgroup, group)
     } else if let Some(group) = marker.strip_suffix("s_per_threadgroup") {
         (ExecutionGroupFact::GroupsPerThreadgroup, group)
-    } else if let Some(group) = marker.strip_prefix("threads_per_") {
-        (ExecutionGroupFact::ThreadsPerGroup, group)
     } else {
-        return None;
+        let group = marker.strip_prefix("threads_per_")?;
+        (ExecutionGroupFact::ThreadsPerGroup, group)
     };
     let lanes = AIR_EXECUTION_GROUPS
         .iter()

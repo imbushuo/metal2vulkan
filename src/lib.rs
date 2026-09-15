@@ -5,8 +5,8 @@
 //! lower residual AIR operations, normalize memory access and control flow, and finalize the module
 //! (see [`passes`]).
 //!
-//! Pipeline: `.air|.ll` -> llvm-dis -> sanitize -> native Vulkan SPIR-V emit -> retained crate
-//! module -> interface+lowering passes -> assemble -> spirv-val (vulkan1.2).
+//! Pipeline: `.air|.ll` -> in-process LLVM I/O -> sanitize -> native Vulkan SPIR-V emit -> retained
+//! crate module -> interface+lowering passes -> assemble -> linked SPIRV-Tools (Vulkan 1.2).
 
 // `too_many_arguments` and `type_complexity` are threshold heuristics that fire pervasively and
 // benignly across this translator: emit/lowering functions legitimately thread many typed
@@ -77,7 +77,7 @@ pub fn detect_stage(src: &str, tmp: &Path) -> Result<passes::Stage, String> {
 /// Translate an AIR bitcode or LLVM-IR file to Vulkan SPIR-V for `stage`.
 ///
 /// Construction selects a representation from AIR structure and owned-module invariants before
-/// serialization. The single resulting module is then validated with `spirv-val` under the Vulkan
+/// serialization. The single resulting module is then validated with linked SPIRV-Tools under the Vulkan
 /// 1.2 environment; validator output never selects or repairs another representation. `tmp` is
 /// caller-owned scratch space and may be reused sequentially, but callers should give concurrent
 /// translations separate directories.

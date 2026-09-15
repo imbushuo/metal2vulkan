@@ -32,38 +32,27 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install LLVM + SPIR-V tools (Ubuntu)
+      - name: Install native dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           sudo apt-get update
-          # llvm: llvm-dis; spirv-tools: spirv-val + the product passthrough path's spirv-as.
+          # libLLVM is loaded by the bitcode reader; SPIRV-Tools is compiled/linked by Cargo.
           # Keep lavapipe available for explicit
           # corpus-vulkan qualification on GPU-less Linux runners.
-          sudo apt-get install -y llvm spirv-tools mesa-vulkan-drivers libvulkan1
-          command -v llvm-dis
-          command -v spirv-val
-          command -v spirv-as
+          sudo apt-get install -y llvm g++ mesa-vulkan-drivers libvulkan1
           # Fail setup early if an explicit corpus-vulkan run would have no ICD.
           shopt -s nullglob
           icds=(/usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json)
           echo "Vulkan ICDs: ${icds[*]:-none}"
           test "${#icds[@]}" -gt 0
 
-      - name: Install LLVM + SPIR-V tools (macOS)
+      - name: Install native dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          brew install llvm spirv-tools
-          # llvm is keg-only: not linked into /opt/homebrew/bin. GITHUB_PATH only
-          # affects *later* steps, so export PATH here before command -v probes.
-          export PATH="/opt/homebrew/opt/llvm/bin:/usr/local/opt/llvm/bin:${PATH}"
-          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
-          echo "/usr/local/opt/llvm/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          command -v llvm-dis
-          command -v spirv-val
-          command -v spirv-as
+          brew install llvm
+          echo "METAL2VULKAN_LLVM_LIBRARY=$(brew --prefix llvm)/lib/libLLVM.dylib" >> "$GITHUB_ENV"
 
       - name: Format
         run: cargo fmt --all -- --check

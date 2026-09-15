@@ -6,9 +6,8 @@ standalone crate.
 ## Prerequisites
 
 - Rust stable (see `rust-version` in `Cargo.toml`)
-- External tools used by some paths:
-  - `llvm-dis` (LLVM)
-  - `spirv-val` (SPIRV-Tools)
+- A C++17 compiler for Cargo's statically linked SPIRV-Tools build
+- LLVM's shared library for bitcode I/O tests
 - A Vulkan ICD or Metal-capable macOS host only for explicit machine-specific authored-case runs
 
 ## Repository layout
@@ -54,10 +53,11 @@ cargo test -p metal2vulkan --all-features
 cargo test -p metal2vulkan-validation --all-features
 ```
 
-External tools used by some paths: `llvm-dis`, `spirv-val` (and friends). On macOS with Homebrew:
+Translation and its Rust tests launch no LLVM/SPIR-V executables. On macOS with Homebrew:
 
 ```sh
-PATH=/opt/homebrew/opt/llvm/bin:$PATH cargo test -p metal2vulkan --all-features
+brew install llvm
+cargo test -p metal2vulkan --all-features
 ```
 
 GPU-free byte A/B is provided by `corpus-ab` in the validation crate.

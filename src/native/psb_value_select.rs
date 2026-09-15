@@ -2138,6 +2138,17 @@ fn apply_value_domain_rewrite(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn validate_universal(module: &Module) {
+        use spirv_tools::val::Validator;
+        // These raw pass fixtures target SPIR-V 1.6, before the product's Vulkan 1.2 finishing.
+        let validator = spirv_tools::val::compiled::CompiledValidator::with_env(
+            spirv_tools::TargetEnv::Universal_1_6,
+        );
+        validator
+            .validate(module.assemble(), None)
+            .expect("validate");
+    }
     use crate::spirv_module::{Block, Function, ModuleHeader};
     use spirv::{Capability, MemoryModel};
 
@@ -2706,20 +2717,7 @@ mod tests {
         assert_eq!(n_loads, 2);
 
         // spirv-val clean.
-        let words: Vec<u32> = m.assemble();
-        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let tmp = std::env::temp_dir().join(format!("m2v_vsel_{}.spv", std::process::id()));
-        std::fs::write(&tmp, &bytes).unwrap();
-        let out = std::process::Command::new("spirv-val")
-            .arg(&tmp)
-            .output()
-            .expect("spirv-val on PATH");
-        let _ = std::fs::remove_file(&tmp);
-        assert!(
-            out.status.success(),
-            "spirv-val failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        validate_universal(&m);
     }
 
     #[test]
@@ -2838,21 +2836,7 @@ mod tests {
             "uint scalar pointer base needs ArrayStride 4"
         );
 
-        let words: Vec<u32> = m.assemble();
-        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let tmp =
-            std::env::temp_dir().join(format!("m2v_vsel_mixed_byte_{}.spv", std::process::id()));
-        std::fs::write(&tmp, &bytes).unwrap();
-        let out = std::process::Command::new("spirv-val")
-            .arg(&tmp)
-            .output()
-            .expect("spirv-val on PATH");
-        let _ = std::fs::remove_file(&tmp);
-        assert!(
-            out.status.success(),
-            "spirv-val failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        validate_universal(&m);
     }
 
     /// Give the two-buffer fixture the same store, but choose the arm from a per-invocation
@@ -2983,19 +2967,6 @@ mod tests {
             "one direct RMW store per concrete buffer arm"
         );
 
-        let words: Vec<u32> = m.assemble();
-        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let tmp = std::env::temp_dir().join(format!("m2v_vstore_{}.spv", std::process::id()));
-        std::fs::write(&tmp, &bytes).unwrap();
-        let out = std::process::Command::new("spirv-val")
-            .arg(&tmp)
-            .output()
-            .expect("spirv-val on PATH");
-        let _ = std::fs::remove_file(&tmp);
-        assert!(
-            out.status.success(),
-            "spirv-val failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        validate_universal(&m);
     }
 }

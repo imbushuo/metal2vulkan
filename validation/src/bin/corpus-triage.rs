@@ -12,18 +12,20 @@ use metal2vulkan_validation::triage::{
     read_cached, select_all, select_cached_audit_target_after, select_uncached, write_cached,
     AuditTarget, StructuralTriage,
 };
+use metal2vulkan_validation::worker::{
+    configure_process_group, terminate_child, worker_resident_bytes,
+    MEMORY_LIMIT_BYTES as TRANSLATION_MEMORY_LIMIT_BYTES, TIME_LIMIT as TRANSLATION_TIMEOUT,
+};
 use metal2vulkan_validation::ScratchDir;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
-const TRANSLATION_TIMEOUT: Duration = Duration::from_secs(20);
-const TRANSLATION_MEMORY_LIMIT_BYTES: u64 = 500 * 1024 * 1024;
 const LARGE_TRANSLATION_SOURCE_BYTES: usize = 256 * 1024;
 const MAX_LARGE_TRANSLATION_JOBS: usize = 2;
 const SERIALIZED_TRANSLATION_MAX_BYTES: usize = 384 * 1024;
@@ -1287,86 +1289,6 @@ fn translate_and_validate_owned_source(
         )?
     };
     metal2vulkan::tools::spirv_val_bytes(&spv, translation_tmp)
-}
-
-#[cfg(target_os = "macos")]
-fn worker_resident_bytes(pid: u32) -> Result<Option<u64>, String> {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
-    let result = unsafe {
-        libc::proc_pid_rusage(
-            pid as libc::c_int,
-            libc::RUSAGE_INFO_V2,
-            usage.as_mut_ptr().cast::<libc::rusage_info_t>(),
-        )
-    };
-    if result == 0 {
-        Ok(Some(unsafe { usage.assume_init() }.ri_resident_size))
-    } else if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        Ok(None)
-    } else {
-        Err(format!(
-            "read translation worker resident memory: {}",
-            std::io::Error::last_os_error()
-        ))
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn worker_resident_bytes(pid: u32) -> Result<Option<u64>, String> {
-    let path = format!("/proc/{pid}/status");
-    let status = match fs::read_to_string(&path) {
-        Ok(status) => status,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("read {path}: {error}")),
-    };
-    let resident_kib = status
-        .lines()
-        .find_map(|line| line.strip_prefix("VmRSS:"))
-        .and_then(|value| value.split_whitespace().next())
-        .and_then(|value| value.parse::<u64>().ok());
-    Ok(resident_kib.map(|kib| kib * 1024))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn worker_resident_bytes(_pid: u32) -> Result<Option<u64>, String> {
-    Ok(None)
-}
-
-#[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt as _;
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_command: &mut Command) {}
-
-#[cfg(unix)]
-fn terminate_child(child: &mut Child) {
-    let group = -(child.id() as i32);
-    unsafe {
-        let _ = libc::kill(group, libc::SIGTERM);
-    }
-    let grace_started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) if grace_started.elapsed() < Duration::from_millis(100) => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) | Err(_) => break,
-        }
-    }
-    unsafe {
-        let _ = libc::kill(group, libc::SIGKILL);
-    }
-    let _ = child.wait();
-}
-
-#[cfg(not(unix))]
-fn terminate_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 fn bounded_detail(error: &str) -> String {

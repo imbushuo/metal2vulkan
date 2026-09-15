@@ -169,8 +169,10 @@ fixes over one-off workarounds.
 
 ### Tooling and temp files
 
-- External tools: **`llvm-dis`** for AIR bitcode input, **`spirv-val`** for product validation, and
-  **`spirv-as`** for passthrough generation. Resolve via PATH or `METAL2VULKAN_<TOOL>` overrides.
+- Translation launches no external tools: AIR I/O uses lazily loaded **libLLVM** (override with
+  `METAL2VULKAN_LLVM_LIBRARY`), while SPIR-V assembly/validation uses statically linked,
+  version-pinned **SPIRV-Tools**. Building needs a C++17 compiler. Keep native calls inside the
+  caller; whole-process resource guards belong to project-owned validation workers.
 - Scratch files under the OS temp dir (or a caller-supplied `tmp`) must be **removed as soon as
   the tool no longer needs them**. The CLI removes its work directory on success and before
   `process::exit` on FALLBACK. Do not reintroduce long-lived dumps under fixed `/tmp/...` paths.

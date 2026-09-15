@@ -32,7 +32,7 @@ pub const REGISTRY: &[EnvVar] = &[
     EnvVar {
         name: "METAL2VULKAN_VAL_PAR",
         default: "3",
-        effect: "max concurrent spirv-val processes (>=1)",
+        effect: "max concurrent in-process SPIRV-Tools validations (>=1)",
     },
     EnvVar {
         name: "METAL2VULKAN_RELOOPER_MAX_BLOCKS",
@@ -40,6 +40,11 @@ pub const REGISTRY: &[EnvVar] = &[
         effect: "requested relooper cases per dispatch group (hard maximum: 1024)",
     },
     // paths
+    EnvVar {
+        name: "METAL2VULKAN_LLVM_LIBRARY",
+        default: "platform library search",
+        effect: "path to libLLVM shared library; read once on first LLVM I/O call",
+    },
     EnvVar {
         name: "METAL2VULKAN_REPRO_DIR",
         default: "$TMPDIR/metal2vulkan-repros",
@@ -54,12 +59,6 @@ pub const REGISTRY: &[EnvVar] = &[
         name: "METAL2VULKAN_PHASE_DUMP",
         default: "unset",
         effect: "path prefix for a per-phase SPIR-V dump of the lowering pipeline (debug)",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_<TOOL>",
-        default: "PATH search",
-        effect: "absolute per-tool override (for example METAL2VULKAN_LLVM_DIS or \
-                 METAL2VULKAN_SPIRV_VAL)",
     },
     // presence-flag debug/trace toggles (set to any value to enable)
     EnvVar {
@@ -200,6 +199,11 @@ fn present(name: &str) -> bool {
     std::env::var_os(name).is_some()
 }
 
+/// Optional shared LLVM library path. The LLVM loader resolves it once, on first LLVM I/O.
+pub fn llvm_library() -> Option<OsString> {
+    std::env::var_os("METAL2VULKAN_LLVM_LIBRARY")
+}
+
 // --- integers ---------------------------------------------------------------
 
 /// Max concurrent spirv-val slots. Default 3; a parsed value `< 1` falls back to the default.
@@ -238,17 +242,6 @@ pub fn retry_dump() -> Option<OsString> {
 /// instead of inferred from the verdict string.
 pub fn phase_dump() -> Option<OsString> {
     std::env::var_os("METAL2VULKAN_PHASE_DUMP")
-}
-
-/// Optional path override for an external tool `cmd` (`llvm-dis`, `spirv-val`, …), read from
-/// `METAL2VULKAN_<CMD>` (uppercased, `-`→`_`). A dynamic family — one var per tool the pipeline
-/// shells out to — documented in `REGISTRY` as a single `METAL2VULKAN_<TOOL>` family row rather than
-/// one entry per tool. Absent → the caller searches the known tool dirs then `PATH`.
-pub fn tool_path_override(cmd: &str) -> Option<OsString> {
-    std::env::var_os(format!(
-        "METAL2VULKAN_{}",
-        cmd.replace('-', "_").to_ascii_uppercase()
-    ))
 }
 
 // --- presence-flag debug/trace toggles --------------------------------------

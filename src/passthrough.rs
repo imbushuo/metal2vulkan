@@ -306,35 +306,6 @@ fn passthrough_vertex_spvasm(
     Ok(p.join("\n") + "\n")
 }
 
-fn assemble_spvasm(asm: &str, tmp: &Path, stem: &str) -> Result<Vec<u8>, String> {
-    let asmf = tmp.join(format!("{stem}.spvasm"));
-    let spvf = tmp.join(format!("{stem}.spv"));
-    std::fs::write(&asmf, asm).map_err(|e| format!("write {}: {e}", asmf.display()))?;
-    // Unified subprocess handling (S3): `tools::run` bounds the tool with a timeout and resolves it
-    // via the shared tool-bin path, and its failure string is `"spirv-as failed:\n<stderr>"` —
-    // byte-identical to the raw runner this replaced.
-    let asmf_s = asmf.to_str().ok_or("passthrough: bad asm path")?;
-    let spvf_s = spvf.to_str().ok_or("passthrough: bad spv path")?;
-    let assembled = tools::run(
-        "spirv-as",
-        &[
-            "--target-env",
-            tools::VULKAN_TARGET_ENV,
-            asmf_s,
-            "-o",
-            spvf_s,
-        ],
-    );
-    let bytes = match assembled {
-        Ok(_) => std::fs::read(&spvf).map_err(|e| format!("read {}: {e}", spvf.display())),
-        Err(e) => Err(e),
-    };
-    // Intermediates only needed for spirv-as I/O.
-    let _ = std::fs::remove_file(&asmf);
-    let _ = std::fs::remove_file(&spvf);
-    bytes
-}
-
 fn passthrough_sanitized_ll(src: &str, tmp: &Path) -> Result<String, String> {
     tools::air_to_sanitized_ll(src, tmp)
 }
@@ -366,7 +337,7 @@ fn translate_passthrough_sanitized(san_ll: &str, tmp: &Path) -> Result<Vec<u8>, 
     let frag = meta::parse_air_fragment_meta(san_ll)
         .ok_or_else(|| "passthrough: source has no !air.fragment metadata".to_string())?;
     let asm = passthrough_vertex_spvasm(&frag, fragment_requires_distinct_float3_inputs(san_ll))?;
-    let spv = assemble_spvasm(&asm, tmp, "passthrough")?;
+    let spv = tools::spirv_assemble(&asm)?;
     tools::spirv_val_bytes(&spv, tmp)?;
     Ok(spv)
 }
@@ -539,7 +510,7 @@ pub fn translate_vertex_observer(
     let vert = meta::parse_air_vertex_meta(&san_ll)
         .ok_or_else(|| "vertex observer: source has no !air.vertex metadata".to_string())?;
     let asm = vertex_observer_fragment_spvasm(&vert, varying_location)?;
-    assemble_spvasm(&asm, tmp, "vertex-observer")
+    tools::spirv_assemble(&asm)
 }
 
 fn fragment_requires_distinct_float3_inputs(ll: &str) -> bool {
