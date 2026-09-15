@@ -492,8 +492,10 @@ fn translator_environment_from(
 }
 
 fn spirv_val_identity() -> Result<String, String> {
+    // New translators link their validator, so the executable hash already identifies it.
+    // Still track an installed validator for A/B against older, subprocess-based translators.
     let path = if let Some(path) = std::env::var_os("METAL2VULKAN_SPIRV_VAL") {
-        PathBuf::from(path)
+        Some(PathBuf::from(path))
     } else {
         [
             "/opt/homebrew/opt/llvm/bin/spirv-val",
@@ -505,9 +507,22 @@ fn spirv_val_identity() -> Result<String, String> {
         .map(PathBuf::from)
         .find(|candidate| candidate.is_file())
         .or_else(|| find_on_path("spirv-val"))
-        .ok_or_else(|| "spirv-val not found in product tool search path".to_string())?
     };
-    let hash = sha256_file(&path)
+    external_validator_identity(path.as_deref())
+}
+
+fn external_validator_identity(path: Option<&Path>) -> Result<String, String> {
+    let Some(path) = path else {
+        return Ok("external-validator-absent;linked-validator-in-binary".into());
+    };
+    match fs::metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(format!("external-validator-missing:{}", path.display()));
+        }
+        Err(error) => return Err(format!("stat external tool {}: {error}", path.display())),
+    }
+    let hash = sha256_file(path)
         .map_err(|error| format!("hash external tool {}: {error}", path.display()))?;
     Ok(format!("{}:{hash}", path.display()))
 }
@@ -523,6 +538,21 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_validator_identity_does_not_require_a_tool_for_linked_translators() {
+        let scratch = ScratchDir::new("validator-identity-test").unwrap();
+        let path = scratch.path().join("validator");
+        let absent = external_validator_identity(None).unwrap();
+        let missing = external_validator_identity(Some(&path)).unwrap();
+        assert_ne!(absent, missing);
+        fs::write(&path, b"first validator").unwrap();
+        let first = external_validator_identity(Some(&path)).unwrap();
+        fs::write(&path, b"second validator").unwrap();
+        let second = external_validator_identity(Some(&path)).unwrap();
+        assert_ne!(missing, first);
+        assert_ne!(first, second);
+    }
 
     #[test]
     fn allowlists_apply_only_to_their_exact_transition() {

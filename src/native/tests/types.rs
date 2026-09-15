@@ -36,19 +36,29 @@ fn native_half_float32_bit_literals_preserve_special_values_and_round_finite_val
         );
         let bytes = emit_vulkan_spirv(&ll).expect("emit authored half literals");
         let module = load_bytes(&bytes).expect("load SPIR-V");
-        let half_ty = module.types_global_values.iter().find_map(|inst| {
-            (inst.class.opcode == Op::TypeFloat
-                && inst.operands == [Operand::LiteralBit32(16)])
-                .then_some(inst.result_id).flatten()
-        }).expect("half type");
-        assert!(module.types_global_values.iter().any(|inst| {
-            inst.class.opcode == Op::Constant
-                && inst.result_type == Some(half_ty)
-                && inst.operands == [Operand::LiteralBit32(expected)]
-        }), "half f0x{source:08x} must become {expected:04x}");
+        let half_ty = module
+            .types_global_values
+            .iter()
+            .find_map(|inst| {
+                (inst.class.opcode == Op::TypeFloat && inst.operands == [Operand::LiteralBit32(16)])
+                    .then_some(inst.result_id)
+                    .flatten()
+            })
+            .expect("half type");
+        assert!(
+            module.types_global_values.iter().any(|inst| {
+                inst.class.opcode == Op::Constant
+                    && inst.result_type == Some(half_ty)
+                    && inst.operands == [Operand::LiteralBit32(expected)]
+            }),
+            "half f0x{source:08x} must become {expected:04x}"
+        );
     }
     let bad = "define i32 @main() {\nentry:\nret i32 f0x7fc00000\n}\n";
-    assert!(emit_vulkan_spirv(bad).is_err(), "bit literals must remain type checked");
+    assert!(
+        emit_vulkan_spirv(bad).is_err(),
+        "bit literals must remain type checked"
+    );
 }
 
 #[test]
@@ -56,10 +66,19 @@ fn native_half_special_literals_translate_in_vertex_and_fragment_stages() {
     let scratch = std::env::temp_dir().join("m2v-authored-half-special-stages");
     std::fs::create_dir_all(&scratch).unwrap();
     for (stage, metadata, output) in [
-        (Stage::Vertex, "vertex", r#"!{!"air.position", !"air.arg_type_name", !"float4"}"#),
-        (Stage::Fragment, "fragment", r#"!{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}"#),
+        (
+            Stage::Vertex,
+            "vertex",
+            r#"!{!"air.position", !"air.arg_type_name", !"float4"}"#,
+        ),
+        (
+            Stage::Fragment,
+            "fragment",
+            r#"!{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}"#,
+        ),
     ] {
-        let source = format!(r#"
+        let source = format!(
+            r#"
 target triple = "spirv-unknown-vulkan1.2"
 define <4 x float> @special_values() {{
 entry:
@@ -71,7 +90,8 @@ entry:
 !1 = !{{!2}}
 !2 = {output}
 !3 = !{{}}
-"#);
+"#
+        );
         let bytes = crate::translate_sanitized_native(&source, stage, &scratch)
             .expect("authored graphics half-special translation");
         tools::spirv_val_bytes(&bytes, &scratch).expect("validated graphics stage");
@@ -178,18 +198,16 @@ declare float @llvm.minnum.f32(float, float)
         .flat_map(|w| w.to_le_bytes())
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
-    assert!(asm.lines().any(|line| line.contains(" FMax ")), "{asm}");
-    assert!(asm.lines().any(|line| line.contains(" FMin ")), "{asm}");
+    // `llvm.maxnum`/`llvm.minnum` are IEEE-754 maxNum/minNum: a NaN operand loses to a non-NaN one.
+    // That is `NMax`/`NMin`, not `FMax`/`FMin`, whose NaN result SPIR-V leaves undefined.
+    assert!(asm.lines().any(|line| line.contains(" NMax ")), "{asm}");
+    assert!(asm.lines().any(|line| line.contains(" NMin ")), "{asm}");
+    assert!(!asm.contains(" FMax "), "{asm}");
+    assert!(!asm.contains(" FMin "), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
     assert!(!asm.contains("llvm.maxnum"), "{asm}");
     assert!(!asm.contains("llvm.minnum"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -223,13 +241,7 @@ declare i32 @air.clamp.s.i32(i32, i32, i32)
     assert!(asm.contains(" SClamp "), "{asm}");
     assert!(!asm.contains(" FClamp "), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -268,13 +280,7 @@ declare <3 x i8> @air.abs_diff.u.v3i8(<3 x i8>, <3 x i8>)
     assert!(asm.contains(" UMin "), "{asm}");
     assert!(asm.contains("OpISub"), "{asm}");
     assert!(!asm.contains("abs_diff"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -300,21 +306,54 @@ declare <3 x i8> @air.sub_sat.u.v3i8(<3 x i8>, <3 x i8>)
 }
 
 #[test]
-fn native_air_unsigned_i16_rhadd_widens_before_rounding() {
+fn native_air_signed_saturating_add_sub_clamp_to_the_end_the_first_operand_names() {
     let ll = r#"
 target triple = "spirv-unknown-vulkan1.2"
-define i16 @rhadd(i16 %a, i16 %b) {
+define <3 x i8> @sat_vec(<3 x i8> %a, <3 x i8> %b) {
 entry:
-  %avg = call i16 @air.rhadd.u.i16(i16 %a, i16 %b)
-  ret i16 %avg
+  %sum = call <3 x i8> @air.add_sat.s.v3i8(<3 x i8> %a, <3 x i8> %b)
+  %diff = call <3 x i8> @air.sub_sat.s.v3i8(<3 x i8> %sum, <3 x i8> %b)
+  ret <3 x i8> %diff
+}
+
+declare <3 x i8> @air.add_sat.s.v3i8(<3 x i8>, <3 x i8>)
+declare <3 x i8> @air.sub_sat.s.v3i8(<3 x i8>, <3 x i8>)
+"#;
+    let asm = disassemble(&emit_vulkan_spirv(ll).expect("native emit")).expect("disassemble");
+    // The clamp end is `(a >> 7) ^ INT_MAX`, so an arithmetic shift over the FIRST operand and a
+    // signed overflow test are what separate this from the unsigned form's single `OpULessThan`.
+    assert!(asm.contains("OpShiftRightArithmetic"), "{asm}");
+    assert!(asm.contains("OpSLessThan"), "{asm}");
+    assert!(asm.contains("OpSelect"), "{asm}");
+    assert!(!asm.contains("OpULessThan"), "{asm}");
+    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+}
+
+#[test]
+fn native_air_halving_add_rounds_in_place_at_every_width() {
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+define i32 @avg(i16 %a, i16 %b, i32 %c, i32 %d) {
+entry:
+  %rounded = call i16 @air.rhadd.u.i16(i16 %a, i16 %b)
+  %truncated = call i32 @air.hadd.s.i32(i32 %c, i32 %d)
+  %widened = zext i16 %rounded to i32
+  %sum = add i32 %widened, %truncated
+  ret i32 %sum
 }
 
 declare i16 @air.rhadd.u.i16(i16, i16)
+declare i32 @air.hadd.s.i32(i32, i32)
 "#;
     let asm = disassemble(&emit_vulkan_spirv(ll).expect("native emit")).expect("disassemble");
-    assert!(asm.contains("OpUConvert"), "{asm}");
-    assert!(asm.contains("OpIAdd"), "{asm}");
+    // `(a|b) - ((a^b)>>1)` and `(a&b) + ((a^b)>>1)` never leave the operand width, so the only
+    // `OpUConvert` in the module is the caller's own `zext`.
+    assert!(asm.contains("OpBitwiseOr"), "{asm}");
+    assert!(asm.contains("OpBitwiseAnd"), "{asm}");
+    assert!(asm.contains("OpBitwiseXor"), "{asm}");
     assert!(asm.contains("OpShiftRightLogical"), "{asm}");
+    assert!(asm.contains("OpShiftRightArithmetic"), "{asm}");
+    assert_eq!(asm.matches("OpUConvert").count(), 1, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
     assert!(!asm.contains("air.rhadd.u.i16"), "{asm}");
 }
@@ -363,13 +402,215 @@ declare i32 @air.pack.unorm4x8.v4f16(<4 x half>)
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpFConvert"), "{asm}");
     assert!(asm.contains("PackUnorm4x8"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
+}
+
+#[test]
+fn native_simdgroup_matrix_load_types_a_bare_buffer_parameter() {
+    // `simdgroup_load(m, buf, 8)` against a bare `device const float *` parameter never GEPs the
+    // pointer, so nothing else in the module says what it points at and it kept the raw word view
+    // every untyped device buffer starts with. `lower_simdgroup_matrix_8x8_load` then refused it for
+    // an integer pointee where the matrix element is a float. The intrinsic itself pins the pointee:
+    // a simdgroup matrix is a 64-lane composite of one element and the pointer is the base of a
+    // row-major block of THAT element. The same load spelled `&buf[i]` always worked.
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+
+define void @k(ptr addrspace(1) %in, ptr addrspace(1) %out) {
+entry:
+  %m = tail call <64 x float> @air.simdgroup_matrix_8x8_load.v64f32.p1f32(ptr addrspace(1) %in, <2 x i64> <i64 8, i64 8>, <2 x i64> <i64 1, i64 8>, <2 x i64> zeroinitializer)
+  tail call void @air.simdgroup_matrix_8x8_store.v64f32.p1f32(<64 x float> %m, ptr addrspace(1) %out, <2 x i64> <i64 8, i64 8>, <2 x i64> <i64 1, i64 8>, <2 x i64> zeroinitializer)
+  ret void
+}
+
+declare <64 x float> @air.simdgroup_matrix_8x8_load.v64f32.p1f32(ptr addrspace(1), <2 x i64>, <2 x i64>, <2 x i64>)
+declare void @air.simdgroup_matrix_8x8_store.v64f32.p1f32(<64 x float>, ptr addrspace(1), <2 x i64>, <2 x i64>, <2 x i64>)
+
+!air.kernel = !{!0}
+!0 = !{ptr @k, !1, !2}
+!1 = !{}
+!2 = !{!3, !4}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"in"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"out"}
+"#;
+    let tmp = std::env::temp_dir().join(format!("metal2vulkan_sgm_bare_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
+    let asm = disassemble(&spv).expect("disassemble");
+    // 64 gathered loads and 64 scattered stores, all at float.
+    assert_eq!(asm.matches("OpLoad").count(), 64, "{asm}");
+    assert_eq!(asm.matches("OpStore").count(), 64, "{asm}");
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn native_simdgroup_matrix_all_half_mac_accumulates_without_an_identity_fconvert() {
+    // The MAC accumulates at f32 whenever the result or any operand is wider than f16. An ALL-half
+    // one accumulates at half, and the operand widening is then the IDENTITY -- but it was emitted
+    // unconditionally, and `OpFConvert` requires the two widths to differ, so the owned module
+    // rejected its own output with "FConvert source and result shapes are inconsistent". No
+    // all-half `simdgroup_multiply_accumulate` could translate at all.
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+
+define void @k(ptr addrspace(1) %in, ptr addrspace(1) %out) {
+entry:
+  %a = tail call <64 x half> @air.simdgroup_matrix_8x8_load.v64f16.p1f16(ptr addrspace(1) %in, <2 x i64> <i64 8, i64 8>, <2 x i64> <i64 1, i64 8>, <2 x i64> zeroinitializer)
+  %r = tail call <64 x half> @air.simdgroup_matrix_8x8_multiply_accumulate.v64f16.v64f16.v64f16.v64f16(<64 x half> %a, <64 x half> %a, <64 x half> %a)
+  tail call void @air.simdgroup_matrix_8x8_store.v64f16.p1f16(<64 x half> %r, ptr addrspace(1) %out, <2 x i64> <i64 8, i64 8>, <2 x i64> <i64 1, i64 8>, <2 x i64> zeroinitializer)
+  ret void
+}
+
+declare <64 x half> @air.simdgroup_matrix_8x8_load.v64f16.p1f16(ptr addrspace(1), <2 x i64>, <2 x i64>, <2 x i64>)
+declare <64 x half> @air.simdgroup_matrix_8x8_multiply_accumulate.v64f16.v64f16.v64f16.v64f16(<64 x half>, <64 x half>, <64 x half>)
+declare void @air.simdgroup_matrix_8x8_store.v64f16.p1f16(<64 x half>, ptr addrspace(1), <2 x i64>, <2 x i64>, <2 x i64>)
+
+!air.kernel = !{!0}
+!0 = !{ptr @k, !1, !2}
+!1 = !{}
+!2 = !{!3, !4}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 2, !"air.arg_type_align_size", i32 2, !"air.arg_type_name", !"half", !"air.arg_name", !"in"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.write", !"air.address_space", i32 1, !"air.arg_type_size", i32 2, !"air.arg_type_align_size", i32 2, !"air.arg_type_name", !"half", !"air.arg_name", !"out"}
+"#;
+    let tmp = std::env::temp_dir().join(format!("metal2vulkan_sgm_half_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+    let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
+    let asm = disassemble(&spv).expect("disassemble");
+    // The arithmetic stays at half throughout: 8 products and 8 sums per lane, and no widening.
+    assert_eq!(asm.matches("OpFMul").count(), 512, "{asm}");
+    assert_eq!(asm.matches("OpFAdd").count(), 512, "{asm}");
+    assert_eq!(asm.matches("OpFConvert").count(), 0, "{asm}");
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
+    let _ = std::fs::remove_dir_all(tmp);
+}
+
+#[test]
+fn native_air_convert_wide_int_to_bfloat_rounds_the_f32_hop_to_odd() {
+    // bf16 keeps 8 significant bits and f32 keeps 24, so a wide integer taken to bf16 through an
+    // f32 intermediate rounds TWICE: an integer just past a bf16 midpoint can round back onto that
+    // midpoint in f32 and then be sent the other way by ties-to-even. Metal converts in one step --
+    // `bfloat(33685505u)` is 0x4C01 on device, 0x4C00 through a plain f32 hop -- so the intermediate
+    // is rounded to odd first. That needs the truncating round trip back to the integer (to learn
+    // whether the f32 hop was exact and which way it went) and the significand's low bit set.
+    let with_source = |ty: &str, size: i32| {
+        format!(
+            r#"
+target triple = "spirv-unknown-vulkan1.2"
+
+define void @k(ptr addrspace(1) %in, ptr addrspace(1) %out) {{
+entry:
+  %v = load {ty}, ptr addrspace(1) %in, align 4
+  %bf = tail call bfloat @air.convert.f.bf16.s.{ty}({ty} %v)
+  store bfloat %bf, ptr addrspace(1) %out, align 2
+  ret void
+}}
+
+declare bfloat @air.convert.f.bf16.s.{ty}({ty})
+
+!air.kernel = !{{!0}}
+!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4}}
+!3 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 {size}, !"air.arg_type_align_size", i32 {size}, !"air.arg_type_name", !"int*", !"air.arg_name", !"in"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.write", !"air.address_space", i32 1, !"air.arg_type_size", i32 2, !"air.arg_type_align_size", i32 2, !"air.arg_type_name", !"bfloat*", !"air.arg_name", !"out"}}
+"#
+        )
+    };
+    let tmp = std::env::temp_dir().join(format!("metal2vulkan_bf16_rto_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+
+    let wide = crate::translate_sanitized_native(&with_source("i32", 4), Stage::Kernel, &tmp)
+        .expect("translate i32 source");
+    let asm = disassemble(&wide).expect("disassemble i32 source");
+    // The clamp that keeps the round trip inside the integer range, the round trip itself, and the
+    // step-down + set-low-bit that names the odd member of the bracketing pair.
+    assert!(asm.contains("FMin"), "{asm}");
+    assert!(asm.contains("OpConvertFToS"), "{asm}");
+    assert!(asm.contains("OpBitwiseOr"), "{asm}");
+    assert!(asm.contains("OpSelect"), "{asm}");
+
+    // A source narrower than the f32 significand cannot round twice, so it keeps the plain hop:
+    // no round trip back to the integer at all.
+    let narrow = crate::translate_sanitized_native(&with_source("i16", 2), Stage::Kernel, &tmp)
+        .expect("translate i16 source");
+    let asm = disassemble(&narrow).expect("disassemble i16 source");
+    assert!(asm.contains("OpConvertSToF"), "{asm}");
+    assert!(!asm.contains("OpConvertFToS"), "{asm}");
+
+    tools::spirv_val_bytes(&wide, &tmp).expect("spirv-val");
+    tools::spirv_val_bytes(&narrow, &tmp).expect("spirv-val");
+}
+
+#[test]
+fn native_wide_vector_convert_and_bitcast_run_one_lane_at_a_time() {
+    // Vulkan has no vector wider than four components, so a wider AIR vector is typed as an
+    // `OpTypeArray` -- and neither a conversion nor an `OpBitcast` accepts an aggregate. Both must
+    // decompose to per-lane work. `air.convert` used to carry a SECOND kind-to-opcode table for the
+    // wide arm, which disagreed with the narrow one about bfloat: bf16's SPIR-V type is
+    // `OpTypeInt 16`, so an `f`->`f` convert into it picked `OpFConvert` on an integer result and
+    // was rejected outright. The wide arm now re-spells the name without its `v<N>` prefixes and
+    // defers to the same lowering the narrow path uses.
+    let with_source = |lanes: u32, elem: &str, air_elem: &str, cast: &str, bits: &str| {
+        let size = lanes * 2;
+        format!(
+            r#"
+target triple = "spirv-unknown-vulkan1.2"
+
+define void @k(ptr addrspace(1) %in, ptr addrspace(1) %out) {{
+entry:
+  %v = load <{lanes} x half>, ptr addrspace(1) %in, align 16
+  %c = tail call <{lanes} x {elem}> @air.convert.f.v{lanes}{air_elem}.f.v{lanes}f16(<{lanes} x half> %v)
+  %b = bitcast <{lanes} x {elem}> %c to <{lanes} x {cast}>
+  %lane = extractelement <{lanes} x {cast}> %b, i64 2
+  store {cast} %lane, ptr addrspace(1) %out, align 4
+  ret void
+}}
+
+declare <{lanes} x {elem}> @air.convert.f.v{lanes}{air_elem}.f.v{lanes}f16(<{lanes} x half>)
+
+!air.kernel = !{{!0}}
+!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4}}
+!3 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 {size}, !"air.arg_type_align_size", i32 {size}, !"air.arg_type_name", !"half*", !"air.arg_name", !"in"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.write", !"air.address_space", i32 1, !"air.arg_type_size", i32 {bits}, !"air.arg_type_align_size", i32 {bits}, !"air.arg_type_name", !"uint*", !"air.arg_name", !"out"}}
+"#
+        )
+    };
+    let tmp = std::env::temp_dir().join(format!("metal2vulkan_wide_lane_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp);
+
+    // Eight lanes into bfloat: the conversion has to take the bf16 route (widen to f32, round the
+    // f32 bits to nearest-even, keep the top 16) at every lane, not a single `OpFConvert`.
+    let source = with_source(8, "bfloat", "bf16", "i16", "2");
+    let wide = crate::translate_sanitized_native(&source, Stage::Kernel, &tmp)
+        .expect("translate wide half->bfloat");
+    let asm = disassemble(&wide).expect("disassemble wide half->bfloat");
+    assert!(asm.contains("OpTypeArray"), "{asm}");
+    assert!(asm.contains("OpCompositeConstruct"), "{asm}");
+    // Per lane: widen the half to f32, then take the f32 bits to bf16 with a ties-to-even carry
+    // and a shift down to the top 16. Eight widenings, not one `OpFConvert` over the array.
+    assert_eq!(asm.matches("OpFConvert").count(), 8, "{asm}");
+    assert!(asm.contains("OpShiftRightLogical"), "{asm}");
+    // The `bitcast <8 x bfloat> to <8 x i16>` costs nothing: bfloat is already modelled as i16, so
+    // the two arrays are the same SPIR-V type and the array copies whole, in one `OpCopyObject`.
+    assert_eq!(asm.matches("OpCopyObject").count(), 1, "{asm}");
+
+    // Sixteen lanes into float: the conversion is an ordinary widening, and the bitcast that
+    // follows it is the part that cannot be one instruction over an array.
+    let source = with_source(16, "float", "f32", "i32", "4");
+    let bits = crate::translate_sanitized_native(&source, Stage::Kernel, &tmp)
+        .expect("translate wide half->float");
+    let asm = disassemble(&bits).expect("disassemble wide half->float");
+    assert_eq!(asm.matches("OpFConvert").count(), 16, "{asm}");
+    // Three arrays are built lane by lane: the loaded `<16 x half>`, the conversion's result and
+    // the bitcast's. Neither the conversion nor the bitcast may name an array operand, which is
+    // what the `spirv-val` run below is really checking.
+    assert_eq!(asm.matches("OpCompositeConstruct").count(), 3, "{asm}");
+
+    tools::spirv_val_bytes(&wide, &tmp).expect("spirv-val wide half->bfloat");
+    tools::spirv_val_bytes(&bits, &tmp).expect("spirv-val wide half->float");
 }
 
 #[test]
@@ -415,17 +656,22 @@ declare bfloat @air.convert.f.bf16.f.f32(float)
     assert!(asm.contains("OpShiftRightLogical"), "{asm}");
     // The float->sint convert now sees a real float input.
     assert!(asm.contains("OpConvertFToS"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
+/// A float-to-integer convert is bare at EVERY destination width -- no clamp, at any of them.
+///
+/// SPIR-V leaves an out-of-range or NaN input undefined, so what a shader gets is Metal's answer,
+/// and Metal's cast SATURATES at every width and sends NaN to zero (device-measured on an Apple M3
+/// Max / macOS 26.5.2; the case `float-to-integer-saturates-at-every-width` carries all 72 rows).
+/// SPIRV-Cross renders `OpConvertFToU`/`OpConvertFToS` as exactly that MSL cast, so the bare
+/// convert reproduces the contract and the clamp that used to wrap the narrow widths only broke
+/// it: `clamp(NaN, lo, hi)` is `lo` on Metal, so a signed narrow destination answered -32768 or
+/// -128 where Metal answers 0; and the clamp edges are spelled in the SOURCE float type, which at
+/// half cannot hold a 16-bit destination's maximum, so `short(half(40000))` came back 32752
+/// instead of 32767.
 #[test]
-fn native_air_float_to_narrow_int_convert_clamps_before_convert() {
+fn native_air_float_to_int_convert_is_bare_at_every_width() {
     let ll = r#"
 target triple = "spirv-unknown-vulkan1.2"
 
@@ -433,17 +679,25 @@ define void @k(ptr addrspace(1) %out_u8, ptr addrspace(1) %out_i16, ptr addrspac
 entry:
   %x = load float, ptr addrspace(1) %in_f, align 4
   %v = load <2 x float>, ptr addrspace(1) %in_vf, align 8
+  %h = fptrunc float %x to half
   %u8 = tail call i8 @air.convert.u.i8.f.f32(float %x)
   %i16 = tail call i16 @air.convert.s.i16.f.f32(float %x)
   %vu8 = tail call <2 x i8> @air.convert.u.v2i8.f.v2f32(<2 x float> %v)
+  %hi16 = tail call i16 @air.convert.s.i16.f.f16(half %h)
+  %i32 = tail call i32 @air.convert.u.i32.f.f32(float %x)
+  %sum = add i16 %i16, %hi16
+  %narrow = trunc i32 %i32 to i16
+  %all = add i16 %sum, %narrow
   store i8 %u8, ptr addrspace(1) %out_u8, align 1
-  store i16 %i16, ptr addrspace(1) %out_i16, align 2
+  store i16 %all, ptr addrspace(1) %out_i16, align 2
   store <2 x i8> %vu8, ptr addrspace(1) %out_vu8, align 2
   ret void
 }
 
 declare i8 @air.convert.u.i8.f.f32(float)
 declare i16 @air.convert.s.i16.f.f32(float)
+declare i16 @air.convert.s.i16.f.f16(half)
+declare i32 @air.convert.u.i32.f.f32(float)
 declare <2 x i8> @air.convert.u.v2i8.f.v2f32(<2 x float>)
 
 !air.kernel = !{!0}
@@ -463,17 +717,14 @@ declare <2 x i8> @air.convert.u.v2i8.f.v2f32(<2 x float>)
     let _ = std::fs::create_dir_all(&tmp);
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
-    assert_eq!(asm.matches(" FClamp ").count(), 3, "{asm}");
-    assert!(asm.contains("OpConvertFToU"), "{asm}");
-    assert!(asm.contains("OpConvertFToS"), "{asm}");
+    // Five converts -- u8, s16, vector u8, s16 from a HALF source, and u32 -- and not one clamp
+    // between them. The half source is the shape whose bound could not be spelled at all.
+    assert!(!asm.contains(" FClamp "), "{asm}");
+    assert!(!asm.contains(" NClamp "), "{asm}");
+    assert_eq!(asm.matches("OpConvertFToU").count(), 3, "{asm}");
+    assert_eq!(asm.matches("OpConvertFToS").count(), 2, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -512,13 +763,7 @@ declare float @air.fast_pow.f32(float, float)
     assert!(asm.contains("OpLogicalAnd"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -557,13 +802,7 @@ declare <3 x half> @air.pow.v3f16(<3 x half>, <3 x half>)
     assert!(asm.contains("OpLogicalAnd"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -604,13 +843,7 @@ entry:
     assert!(asm.contains("OpShiftRightLogical"), "{asm}");
     // spirv-val is the authoritative check: it rejects an `OpFAdd` whose result type is an integer
     // vector ("Expected floating scalar or vector type"), which is exactly the bug this guards.
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -655,13 +888,7 @@ entry:
     assert!(asm.contains("OpFOrdLessThanEqual"), "{asm}");
     assert!(asm.contains("OpCompositeExtract"), "{asm}");
     assert!(asm.contains("OpCompositeConstruct"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -733,13 +960,7 @@ declare <2 x i32> @air.convert.s.v2i32.s.v2i16(<2 x i16>)
     assert!(asm.contains("OpUConvert"), "{asm}");
     assert!(asm.contains("OpSConvert"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -781,13 +1002,7 @@ declare <2 x i16> @air.convert.s.v2i16.u.v2i32(<2 x i32>)
             .any(|line| line.contains(" OpBitcast ") && line.contains("v2ushort")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -821,13 +1036,7 @@ declare i16 @air.convert.s.i16.u.i16(i16)
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpCopyObject"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -871,13 +1080,7 @@ entry:
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1100,13 +1303,7 @@ declare bfloat @llvm.fmuladd.bf16(bfloat, bfloat, bfloat)
     assert!(asm.contains("OpBitcast"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1162,13 +1359,7 @@ entry:
         assert_eq!(insts[0].result_type, Some(float_ty), "{op:?}\n{asm}");
         assert_ne!(insts[0].result_type, Some(ushort_ty), "{op:?}\n{asm}");
     }
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1192,20 +1383,20 @@ entry:
   store i32 %w, ptr addrspace(1) %out, align 4
   ret void
 }
+
+!air.kernel = !{!0}
+!0 = !{ptr @k, !1, !2}
+!1 = !{}
+!2 = !{!3}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_name", !"uint*", !"air.arg_name", !"out"}
 "#;
     let tmp = std::env::temp_dir().join(format!(
         "metal2vulkan_native_union_byte_store_{}",
         std::process::id()
     ));
     let _ = std::fs::create_dir_all(&tmp);
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        let out = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    let out = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1257,6 +1448,57 @@ entry:
     assert!(asm.contains("OpShiftLeftLogical"), "{asm}");
     assert!(asm.contains("OpBitwiseOr"), "{asm}");
     assert!(asm.contains("OpUConvert"), "{asm}");
+    assert!(!asm.contains("does not match Object"), "{asm}");
+}
+
+#[test]
+fn native_single_member_struct_store_descends_to_the_union_member() {
+    // The same reinterpret as above, but stored straight AT the union rather than through a
+    // `getelementptr` to member 0: an MSL union is a one-member LLVM struct, so the declared pointee
+    // is `%union.U`, no width-based rule has an answer for it, and the store used to fall through to
+    // a plain `OpStore` the pointee/value contract refuses. Member 0 of a single-member struct is the
+    // slot's own address, so the emitter descends to it and the read-modify-write applies unchanged.
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+%union.U = type { i64 }
+
+define void @float_into_union(float %f) {
+entry:
+  %scratch = alloca %union.U, align 8
+  store float %f, ptr %scratch, align 4
+  ret void
+}
+"#;
+    let asm = disassemble(&emit_vulkan_spirv(ll).expect("native emit")).expect("disassemble");
+    assert!(asm.contains("AccessChain"), "{asm}");
+    assert!(asm.contains("OpShiftRightLogical"), "{asm}");
+    assert!(asm.contains("OpShiftLeftLogical"), "{asm}");
+    assert!(asm.contains("OpBitwiseOr"), "{asm}");
+    assert!(asm.contains("OpUConvert"), "{asm}");
+    assert!(!asm.contains("does not match Object"), "{asm}");
+}
+
+#[test]
+fn native_single_member_struct_store_reaches_the_vector_rules_too() {
+    // The descent happens once, at the store dispatch, so every rule below it applies to the union
+    // member -- not just the scalar narrowing one. A `uint2` member of the same eight-byte union is a
+    // SAME-WIDTH reinterpret of the `i64` slot, which is a different rule and a different lowering
+    // (a plain `OpBitcast`, no read-modify-write, because the store covers every byte of the slot).
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+%union.U = type { i64 }
+
+define void @vector_into_union(<2 x i32> %v) {
+entry:
+  %scratch = alloca %union.U, align 8
+  store <2 x i32> %v, ptr %scratch, align 8
+  ret void
+}
+"#;
+    let asm = disassemble(&emit_vulkan_spirv(ll).expect("native emit")).expect("disassemble");
+    assert!(asm.contains("AccessChain"), "{asm}");
+    assert!(asm.contains("OpBitcast"), "{asm}");
+    assert!(!asm.contains("OpShiftRightLogical"), "{asm}");
     assert!(!asm.contains("does not match Object"), "{asm}");
 }
 
@@ -1338,13 +1580,7 @@ join:
     );
     assert!(!asm.contains("OpVectorShuffle"), "{asm}");
     assert!(asm.contains("OpCompositeExtract"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1400,13 +1636,7 @@ entry:
     ));
     let _ = std::fs::create_dir_all(&tmp);
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1636,13 +1866,7 @@ declare i32 @air.popcount.i32(i32)
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpBitCount"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1673,13 +1897,7 @@ declare i32 @llvm.ctpop.i32(i32)
     assert!(asm.contains("OpBitCount"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
     assert!(!asm.contains("llvm_ctpop"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1743,13 +1961,7 @@ declare i64 @air.popcount.i64(i64)
     assert!(asm.contains("OpShiftRightLogical"), "{asm}");
     assert!(asm.contains("OpIAdd"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1835,13 +2047,7 @@ declare <2 x i64> @air.popcount.v2i64(<2 x i64>)
     assert!(asm.contains("OpShiftRightLogical"), "{asm}");
     assert!(asm.contains("OpIAdd"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1881,17 +2087,17 @@ declare <3 x float> @air.fast_log2.v3f32(<3 x float>)
     assert!(!asm.contains(" Exp "), "{asm}");
     assert!(!asm.contains(" Log "), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
+/// `air.mix` is a bare `FMix` -- no endpoint guard around it.
+///
+/// The guard that used to be here selected `x` when `t == 0` and `y` when `t == 1`. For a finite
+/// pair that changes nothing, because `x * (1 - a) + y * a` is already exactly `x` at 0 and exactly
+/// `y` at 1; for a non-finite pair it made us disagree with Metal, which answers NaN for
+/// `mix(inf, 5, 1)` where the guard answered 5. See `mix-an-infinite-endpoint-into-a-nan`.
 #[test]
-fn native_air_mix_preserves_exact_vector_endpoints() {
+fn native_air_mix_is_a_bare_blend_with_no_endpoint_guard() {
     let ll = r#"
 target triple = "spirv-unknown-vulkan1.2"
 define void @main(float %t) {
@@ -1928,16 +2134,10 @@ declare <4 x float> @air.mix.v4f32(<4 x float>, <4 x float>, <4 x float>)
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains(" FMix "), "{asm}");
-    assert!(asm.matches("OpFOrdEqual").count() >= 2, "{asm}");
-    assert!(asm.matches("OpSelect").count() >= 2, "{asm}");
+    assert_eq!(asm.matches("OpFOrdEqual").count(), 0, "{asm}");
+    assert_eq!(asm.matches("OpSelect").count(), 0, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2008,21 +2208,187 @@ declare <4 x float> @air.fast_powr.v4f32(<4 x float>, <4 x float>)
     assert!(asm.contains(" Asinh "), "{asm}");
     assert!(asm.contains(" Acosh "), "{asm}");
     assert!(asm.contains(" Atanh "), "{asm}");
-    assert!(asm.contains(" Log "), "{asm}");
+    // `air.fast_log10` is `log2(x) * log10(2)`, not `log(x) / ln(10)`: the natural-log form
+    // disagrees with Metal on 1995 of a 2011-argument device sweep, this one on none of them.
+    assert!(asm.contains(" Log2 "), "{asm}");
+    assert!(!asm.contains(" Log "), "{asm}");
     assert!(asm.contains(" Pow "), "{asm}");
-    assert!(asm.contains("OpFDiv"), "{asm}");
+    assert!(asm.contains("OpFMul"), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
+}
+
+/// A half `log10` multiplies at FLOAT width, and a half `exp10` does not widen at all.
+///
+/// `log10` is composed as `log2(x) * log10(2)`. Rounding that intermediate to half does not
+/// reproduce Metal: evaluated entirely in half it disagrees with Metal's `log10(half)` on 8081 of
+/// the 63488 finite halves, and evaluated in float and rounded once it agrees on all 63488
+/// (device-measured, Apple M3 Max / macOS 26.5.2). `exp10` needs no such promotion -- half-width
+/// `powr(10, x)` is bit-identical to Metal's `exp10(half)` on all 63488.
+///
+/// The vector `exp10` is here because the composition used to be scalar-only and FALLBACK on a
+/// vector; that refusal had no reason behind it.
+#[test]
+fn native_half_log10_multiplies_at_float_width() {
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+define void @main() {
+entry:
+  %l = tail call fast half @air.log10.f16(half 0xH5640)
+  %e = tail call fast half @air.exp10.f16(half 0xH4000)
+  %sum = fadd fast half %l, %e
+  %wide = fpext half %sum to float
+  %v0 = insertelement <2 x float> poison, float 2.500000e-01, i32 0
+  %v1 = insertelement <2 x float> %v0, float 7.500000e-01, i32 1
+  %t = tail call fast <2 x float> @air.fast_exp10.v2f32(<2 x float> %v1)
+  %lane = extractelement <2 x float> %t, i32 0
+  %all = fadd fast float %wide, %lane
+  %sink = fcmp oge float %all, 0.000000e+00
+  ret void
+}
+
+declare half @air.log10.f16(half)
+declare half @air.exp10.f16(half)
+declare <2 x float> @air.fast_exp10.v2f32(<2 x float>)
+"#;
+    let tmp = std::env::temp_dir().join(format!(
+        "metal2vulkan_half_log10_float_width_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&tmp);
+    let module = load_bytes(emit_vulkan_spirv(ll).expect("native emit")).expect("load native spv");
+    let out = passes::transform(module, Stage::Kernel, None, None, None, Some("main"))
+        .expect("interface transform")
+        .assemble()
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect::<Vec<_>>();
+    let asm = disassemble(&out).expect("disassemble transformed");
+    let scalar_ty = |width: &str| {
+        asm.lines()
+            .find(|line| line.contains(&format!("OpTypeFloat {width}")))
+            .and_then(|line| line.split('=').next())
+            .map(str::trim)
+            .unwrap_or_else(|| panic!("a {width}-bit float type: {asm}"))
+            .to_string()
+    };
+    let float_ty = scalar_ty("32");
+    let half_ty = scalar_ty("16");
+    let result_ty = |line: &str, op: &str| {
+        line.split(op)
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("result type")
+            .to_string()
+    };
+    let ext_widths = |op: &str| {
+        asm.lines()
+            .filter(|line| line.contains(op))
+            .map(|line| result_ty(line, "OpExtInst"))
+            .collect::<Vec<_>>()
+    };
+    // The natural log is not involved at any width.
+    assert!(!asm.contains(" Log "), "{asm}");
+    assert_eq!(ext_widths(" Log2 "), vec![float_ty.clone()], "{asm}");
+    // `exp10` stays at half: a `Pow` at half width, no promotion. The vector `exp10` lowers to a
+    // second `Pow` instead of falling back.
+    let pow_widths = ext_widths(" Pow ");
+    assert_eq!(pow_widths.len(), 2, "{asm}");
+    assert!(pow_widths.contains(&half_ty), "{asm}");
+    // No multiply in the composition happens at half width.
+    let half_muls = asm
+        .lines()
+        .filter(|line| line.contains("OpFMul"))
+        .filter(|line| result_ty(line, "OpFMul") == half_ty)
+        .count();
+    assert_eq!(half_muls, 0, "{asm}");
+    // Two converts for the widened half log10, one for the fpext the fixture writes; the half
+    // exp10 and the float-vector exp10 add none.
+    assert_eq!(asm.matches("OpFConvert").count(), 3, "{asm}");
+    assert!(!asm.contains("OpFunctionCall"), "{asm}");
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
+}
+
+/// A half `Tanh`/`Atan2` is computed at float width, and a float one is not widened.
+///
+/// SPIRV-Cross -- what MoltenVK runs our modules through -- chooses Metal's `fast::` variant for a
+/// HALF `Tanh`/`Atan2` and its `precise::` variant for the float one. `fast::tanh(44)` is 0 and
+/// `fast::tanh(50)` is NaN where Metal's own `tanh(half)` is 1.0, so a half ext-inst names a
+/// different function than the AIR call did.
+#[test]
+fn native_half_tanh_and_atan2_are_computed_at_float_width() {
+    let ll = r#"
+target triple = "spirv-unknown-vulkan1.2"
+define void @main() {
+entry:
+  %h = tail call fast half @air.tanh.f16(half 0xH5180)
+  %a = tail call fast half @air.atan2.f16(half 0xH3C00, half 0xH4000)
+  %g = tail call fast half @air.fast_atan2.f16(half 0xH3C00, half 0xH4000)
+  %f = tail call fast float @air.tanh.f32(float 4.400000e+01)
+  %sum = fadd fast half %h, %a
+  %sum2 = fadd fast half %sum, %g
+  %wide = fpext half %sum2 to float
+  %all = fadd fast float %wide, %f
+  %sink = fcmp oge float %all, 0.000000e+00
+  ret void
+}
+
+declare half @air.tanh.f16(half)
+declare half @air.atan2.f16(half, half)
+declare half @air.fast_atan2.f16(half, half)
+declare float @air.tanh.f32(float)
+"#;
+    let tmp = std::env::temp_dir().join(format!(
+        "metal2vulkan_half_tanh_float_width_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&tmp);
+    let module = load_bytes(emit_vulkan_spirv(ll).expect("native emit")).expect("load native spv");
+    let out = passes::transform(module, Stage::Kernel, None, None, None, Some("main"))
+        .expect("interface transform")
+        .assemble()
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect::<Vec<_>>();
+    let asm = disassemble(&out).expect("disassemble transformed");
+    let float_ty = asm
+        .lines()
+        .find(|line| line.contains("OpTypeFloat 32"))
+        .and_then(|line| line.split('=').next())
+        .map(str::trim)
+        .expect("a 32-bit float type")
+        .to_string();
+    let ext_inst_result_ty = |line: &str| {
+        line.split("OpExtInst")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("ext-inst result type")
+            .to_string()
+    };
+    let widths = |op: &str| {
+        asm.lines()
+            .filter(|line| line.contains(op))
+            .map(ext_inst_result_ty)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(widths(" Tanh "), vec![float_ty.clone(); 2], "{asm}");
+    // Two atan2 calls: the precise one widens, and `air.fast_atan2` is asking for exactly the
+    // `fast::` variant the half width already reaches, so it must NOT.
+    let atan2 = widths(" Atan2 ");
+    assert_eq!(atan2.len(), 2, "{asm}");
+    assert!(atan2.contains(&float_ty), "precise atan2 widens: {asm}");
+    assert!(
+        atan2.iter().any(|ty| *ty != float_ty),
+        "air.fast_atan2.f16 must stay at half width: {asm}"
+    );
+    // Three converts for the widened half atan2 (two in, one out), two for the half tanh, and one
+    // for the fpext the fixture writes. The fast atan2 and the float tanh add none.
+    assert_eq!(asm.matches("OpFConvert").count(), 6, "{asm}");
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
-fn native_half_pow_uses_abs_base() {
+fn native_half_pow_signs_the_magnitude_by_exponent_parity() {
     let ll = r#"
 target triple = "spirv-unknown-vulkan1.2"
 define void @main() {
@@ -2053,16 +2419,20 @@ declare <3 x half> @air.pow.v3f16(<3 x half>, <3 x half>)
         .flat_map(|w| w.to_le_bytes())
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
+    // GLSL Pow only takes the magnitude; the base's sign comes back only when the exponent is an
+    // odd integer, and a non-integer exponent leaves the domain entirely.
     assert!(asm.contains(" FAbs "), "{asm}");
     assert!(asm.contains(" Pow "), "{asm}");
+    assert!(asm.contains(" Trunc "), "{asm}");
+    assert!(asm.contains("OpFNegate"), "{asm}");
+    assert!(asm.contains("OpFOrdNotEqual"), "{asm}");
+    assert!(asm.contains("OpFOrdLessThan"), "{asm}");
+    assert!(
+        asm.contains("NaN"),
+        "the out-of-domain arm needs a NaN constant: {asm}"
+    );
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2096,15 +2466,13 @@ declare <4 x float> @air.fast_round.v4f32(<4 x float>)
         .flat_map(|w| w.to_le_bytes())
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
-    assert!(asm.contains(" Round "), "{asm}");
+    // Lanes 2 and 3 are the ties 2.5 and -2.5, which Metal rounds to 3.0 and -3.0. GLSL Round
+    // picks the tie direction itself, so the lowering is the explicit trunc/remainder form.
+    assert!(!asm.contains(" Round "), "{asm}");
+    assert!(asm.contains(" Trunc "), "{asm}");
+    assert_eq!(asm.matches("OpSelect").count(), 2, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2140,31 +2508,25 @@ declare <4 x float> @air.fast_rint.v4f32(<4 x float>)
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains(" RoundEven "), "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
-fn native_round_half_vector_round_trips_through_float() {
+fn native_rint_half_vector_round_trips_through_float() {
     let ll = r#"
 target triple = "spirv-unknown-vulkan1.2"
 define void @main(<2 x half> %v) {
 entry:
-  %rounded = tail call fast <2 x half> @air.round.v2f16(<2 x half> %v)
+  %rounded = tail call fast <2 x half> @air.rint.v2f16(<2 x half> %v)
   %lane = extractelement <2 x half> %rounded, i32 0
   %sink = fcmp oge half %lane, 0xH0000
   ret void
 }
 
-declare <2 x half> @air.round.v2f16(<2 x half>)
+declare <2 x half> @air.rint.v2f16(<2 x half>)
 "#;
     let tmp = std::env::temp_dir().join(format!(
-        "metal2vulkan_native_round_half_vector_{}",
+        "metal2vulkan_native_rint_half_vector_{}",
         std::process::id()
     ));
     let _ = std::fs::create_dir_all(&tmp);
@@ -2177,14 +2539,8 @@ declare <2 x half> @air.round.v2f16(<2 x half>)
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpFConvert"), "{asm}");
-    assert!(asm.contains(" Round "), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    assert!(asm.contains(" RoundEven "), "{asm}");
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2255,13 +2611,7 @@ entry:
         asm.matches("OpSelect").count() >= 2,
         "expected selected safe denominators for urem and srem\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2504,13 +2854,7 @@ declare i32 @air.max.s.i32(i32, i32)
             "signed min/max op {glsl_op} used unsigned result type\n{asm}"
         );
     }
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2646,4 +2990,65 @@ merge:
         }
         Err(e) => panic!("emit failed: {}", e),
     }
+}
+
+#[test]
+fn native_typed_and_opaque_pointer_spellings_translate_identically() {
+    // `xcrun metal -S -emit-llvm` still emits LLVM's pre-opaque pointer spelling, so an AIR
+    // module straight out of the Metal frontend reads `i32 addrspace(1)* %0` where the corpus
+    // reads `ptr addrspace(1) %0`. The two spell one pointer and have to translate to one
+    // module. Before the type parser knew the trailing `*`, every prefix scan backtracked past
+    // it and handed back the POINTEE -- so the buffer parameter came out as `Int(32)` and the
+    // first GEP off it died with "getelementptr base is not a pointer".
+    const METADATA: &str = r#"
+!air.kernel = !{!0}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"a"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"o"}
+!5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
+"#;
+    let typed = format!(
+        r#"
+source_filename = "case.metal"
+
+define void @tp(i32 addrspace(1)* nocapture readonly %0, i32 addrspace(1)* nocapture %1, i32 %2) {{
+  %4 = zext i32 %2 to i64
+  %5 = getelementptr inbounds i32, i32 addrspace(1)* %0, i64 %4
+  %6 = load i32, i32 addrspace(1)* %5, align 4
+  %7 = add i32 %6, 7
+  %8 = getelementptr inbounds i32, i32 addrspace(1)* %1, i64 %4
+  store i32 %7, i32 addrspace(1)* %8, align 4
+  ret void
+}}
+!0 = !{{void (i32 addrspace(1)*, i32 addrspace(1)*, i32)* @tp, !1, !2}}
+{METADATA}"#
+    );
+    let opaque = format!(
+        r#"
+source_filename = "case.metal"
+
+define void @tp(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) captures(none) %1, i32 %2) {{
+  %4 = zext i32 %2 to i64
+  %5 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %4
+  %6 = load i32, ptr addrspace(1) %5, align 4
+  %7 = add i32 %6, 7
+  %8 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %4
+  store i32 %7, ptr addrspace(1) %8, align 4
+  ret void
+}}
+!0 = !{{ptr @tp, !1, !2}}
+{METADATA}"#
+    );
+
+    let tmp = std::env::temp_dir().join(format!(
+        "metal2vulkan_native_typed_pointer_spelling_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&tmp);
+    let from_typed =
+        crate::translate_sanitized_native(&typed, Stage::Kernel, &tmp).expect("typed pointers");
+    let from_opaque =
+        crate::translate_sanitized_native(&opaque, Stage::Kernel, &tmp).expect("opaque pointers");
+    assert_eq!(from_typed, from_opaque);
 }

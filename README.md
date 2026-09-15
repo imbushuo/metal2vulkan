@@ -23,12 +23,26 @@ with a native Rust emitter and retained-SPIR-V passes.
 ## Requirements
 
 - Rust 1.87 or newer
-- `llvm-dis` when the input is AIR bitcode
-- `spirv-val` from SPIRV-Tools for product translation
+- A C++17 compiler at build time (Cargo builds and statically links pinned SPIRV-Tools sources)
+- LLVM's shared library when the input is AIR bitcode; textual `.ll` translation needs no LLVM
 
-Tool paths are found through the usual search path. Override an individual tool with
-`METAL2VULKAN_LLVM_DIS`, `METAL2VULKAN_SPIRV_VAL`, or the corresponding
-`METAL2VULKAN_<TOOL>` variable.
+**Translation spawns no external processes.** Bitcode disassembly uses LLVM's C API in the calling
+process; SPIR-V assembly and full Vulkan 1.2 validation use the linked SPIRV-Tools library.
+No `llvm-dis`, `llvm-as`, `spirv-as`, or `spirv-val` executable is required at runtime.
+
+On macOS, install LLVM with `brew install llvm`. On Debian/Ubuntu, install the distribution's LLVM
+package (`sudo apt-get install llvm`). The loader searches Homebrew locations on Apple Silicon and
+Intel Macs, and standard LLVM library names/locations on Linux. To select a specific installation:
+
+```sh
+export METAL2VULKAN_LLVM_LIBRARY=/path/to/libLLVM.dylib # macOS
+# export METAL2VULKAN_LLVM_LIBRARY=/path/to/libLLVM.so  # Linux
+```
+
+The library is loaded once, on first LLVM I/O. An explicit path that cannot be loaded returns an
+error; it never falls back to an executable. The former `METAL2VULKAN_<TOOL>` executable overrides
+are no longer used by translation. LLVM versions can change printed IR; keep the LLVM library
+version fixed when comparing bitcode-derived identities.
 
 ## Install
 

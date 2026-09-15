@@ -181,6 +181,24 @@ pub(crate) fn drop_dangling_debug(module: &mut Module) {
     module.annotations.retain(&keep);
 }
 
+/// Decorations that only DESCRIBE the explicit memory layout of the declaration they name. They are
+/// metadata owned by their target, not an independent reason for it to exist, so `gc_dead_globals`
+/// does not root liveness at them.
+///
+/// This is an allowlist on purpose. Most decorations do give their target a module-level role that
+/// nothing else records -- `BuiltIn WorkgroupSize` on an otherwise unreferenced constant is the
+/// local-size declaration, `SpecId` is the specialization contract -- and treating every decoration
+/// as description broke 9,857 of the 14,579 corpus sources on exactly that constant.
+const LAYOUT_DECORATIONS: &[spirv::Decoration] = &[
+    spirv::Decoration::ArrayStride,
+    spirv::Decoration::Block,
+    spirv::Decoration::BufferBlock,
+    spirv::Decoration::ColMajor,
+    spirv::Decoration::MatrixStride,
+    spirv::Decoration::Offset,
+    spirv::Decoration::RowMajor,
+];
+
 /// Iteratively drop types/global-values whose result id is referenced nowhere else in the module
 /// (instruction operands, result-types, decorations, entry-point interface, function bodies). Keeps
 /// variables referenced by the entry interface. Repeats to a fixpoint so chains die cleanly.
@@ -215,12 +233,15 @@ pub(super) fn gc_dead_globals(ctx: &mut Ctx) {
         }
     }
     for instruction in &ctx.module.annotations {
-        // ArrayStride is metadata owned by its target type, not an independent liveness root. A
-        // late BDA candidate can leave a decorated physical pointer type after its executable
-        // address path is eliminated; rooting the type from this decoration would retain an
-        // otherwise-dead capability-requiring declaration in a Logical module.
-        if instruction.operands.get(1) == Some(&Operand::Decoration(spirv::Decoration::ArrayStride))
-        {
+        // A layout decoration describes its target; it does not use it. Rooting liveness at the
+        // target lets a `Block`/`Offset`-decorated struct keep itself, and every member type it
+        // names, alive on the strength of its own description, and lets an `ArrayStride`-decorated
+        // physical pointer retain a capability-requiring declaration in a Logical module. The
+        // decoration operand sits at a different position on `OpDecorate` than on
+        // `OpMemberDecorate`, so look for it anywhere in the instruction.
+        if instruction.operands.iter().any(|operand| {
+            matches!(operand, Operand::Decoration(decoration) if LAYOUT_DECORATIONS.contains(decoration))
+        }) {
             continue;
         }
         collect(instruction, &mut live);
@@ -268,27 +289,248 @@ pub(super) fn gc_dead_globals(ctx: &mut Ctx) {
     drop_dangling_debug(&mut ctx.module);
 }
 
-/// Remove `OpCapability Int64` when no `OpTypeInt 64` survives (i.e. no genuine 64-bit-int type is
-/// used anywhere after access-chain narrowing + dead-global gc). Leaving a capability whose feature is
-/// unused is legal for spirv-val, but the Int64 declaration is what cues NVIDIA's compiler down the
-/// 64-bit path that crashes; dropping it keeps the module strictly 32-bit. If genuine i64 math remains
-/// the type is still present and we leave the capability (and `add_needed_capabilities` would re-add it).
-pub(super) fn drop_unused_int64_capability(ctx: &mut Ctx) {
-    let has_int64_type = ctx.module.types_global_values.iter().any(|i| {
-        i.class.opcode == Op::TypeInt && i.operands.first() == Some(&Operand::LiteralBit32(64))
-    });
-    if has_int64_type {
-        return;
-    }
-    ctx.module.capabilities.retain(|c| {
-        !matches!(
-            c.operands.first(),
-            Some(Operand::Capability(spirv::Capability::Int64))
-        )
+/// Remove every `OpCapability Int8`/`Int16`/`Int64`/`Float16`/`Float64` whose scalar type does not
+/// survive (i.e. is used nowhere after access-chain narrowing + dead-global gc).
+///
+/// Leaving a capability whose feature is unused is legal for spirv-val, but it is not free. It is
+/// what cues NVIDIA's compiler down the 64-bit path that crashes, and every one of these is a
+/// Vulkan device feature -- `shaderInt8`, `shaderInt16`, `shaderFloat16`, `shaderFloat64` -- so a
+/// module that declares one it never uses refuses to load on hardware that would otherwise have run
+/// it. **Measured before this generalized past `Int64`: 656 of the 14,579 corpus sources declared a
+/// width capability with no type of that width -- 591 `Int8`, 32 `Float16`, 29 `Int16`.**
+///
+/// The width->capability table is `native::scalar_width_capability`, the same one the owned-module
+/// check reads in the opposite direction to REFUSE a module that declares such a type without the
+/// capability. If genuine narrow math remains the type is still present, so the capability stays
+/// (and `add_needed_capabilities` would re-add it).
+pub(crate) fn drop_unused_scalar_width_capabilities(module: &mut Module) {
+    let used: HashSet<spirv::Capability> = module
+        .types_global_values
+        .iter()
+        .filter(|i| matches!(i.class.opcode, Op::TypeInt | Op::TypeFloat))
+        .filter_map(|i| match i.operands.first() {
+            Some(&Operand::LiteralBit32(width)) => {
+                crate::native::scalar_width_capability(i.class.opcode, width)
+            }
+            _ => None,
+        })
+        .collect();
+    module.capabilities.retain(|c| match c.operands.first() {
+        Some(&Operand::Capability(capability)) => {
+            !matches!(
+                capability,
+                spirv::Capability::Int8
+                    | spirv::Capability::Int16
+                    | spirv::Capability::Int64
+                    | spirv::Capability::Float16
+                    | spirv::Capability::Float64
+            ) || used.contains(&capability)
+        }
+        _ => true,
     });
 }
 
+/// Capabilities whose ENTIRE requirement is expressed in the SPIR-V grammar: each one is enabling
+/// for a fixed set of opcodes or enumerants and nothing else, so "no instruction and no operand in
+/// the finished module names it" is a proof that it is unused.
+///
+/// This is deliberately an ALLOWLIST rather than the complement of a blocklist. Plenty of
+/// capabilities are demanded by validation RULES the grammar cannot see -- `VariablePointers` by a
+/// pointer reaching an `OpPhi`, `StorageBuffer8BitAccess` by a narrow type landing in a block,
+/// `StorageImageWriteWithoutFormat` by an `Unknown` format being written -- and for those the
+/// grammar's silence means nothing. Getting this list short is safe (a capability we could have
+/// dropped survives); getting it wrong in the other direction would emit a module that does not
+/// validate. `VariablePointers`/`VariablePointersStorageBuffer` are excluded on purpose:
+/// `drop_unused_variable_pointer_capabilities` computes them from the rule that actually governs
+/// them. So are `Image1D`/`ImageBuffer`/`Sampled1D`/`SampledBuffer`: the grammar attaches those to
+/// the `Dim` enumerant of `OpTypeImage`, but the validator demands them to ACCESS such an image
+/// ("Capability ImageBuffer is required to access storage image"), and a module can reach an image
+/// whose type it did not spell. Dropping them broke 9 of the 14,579 corpus sources, measured;
+/// `add_needed_capabilities` computes those from the finished module already.
+const GRAMMAR_COMPLETE_CAPABILITIES: &[spirv::Capability] = &[
+    spirv::Capability::DemoteToHelperInvocation,
+    spirv::Capability::FloatControls2,
+    spirv::Capability::GroupNonUniformArithmetic,
+    spirv::Capability::GroupNonUniformBallot,
+    spirv::Capability::GroupNonUniformClustered,
+    spirv::Capability::GroupNonUniformQuad,
+    spirv::Capability::GroupNonUniformShuffle,
+    spirv::Capability::GroupNonUniformShuffleRelative,
+    spirv::Capability::GroupNonUniformVote,
+    spirv::Capability::ImageQuery,
+    spirv::Capability::StorageImageExtendedFormats,
+];
+
+/// Remove an `OpTypeInt`/`OpTypeFloat` no instruction references, so
+/// [`drop_unused_scalar_width_capabilities`] sees the widths the module actually uses.
+///
+/// A dead scalar type is not free: the width drop keys on the type EXISTING, so one that survives
+/// keeps its capability, and with it the Vulkan device feature. **Measured: 30 of the 14,579 corpus
+/// sources declared `Int64` (22) or `Int16` (8) purely through a type no instruction touched** --
+/// and a declared-but-unused `Int64` is the exact thing that dropper's comment says cues NVIDIA's
+/// compiler down the 64-bit path that crashes.
+///
+/// `gc_dead_globals` does not reach these because it runs before CFG construction deletes the last
+/// user. Its own carve-out covers layout decorations (`LAYOUT_DECORATIONS`), which is what stops a
+/// `Block`/`Offset`-decorated struct keeping its member types alive on the strength of its own
+/// description; this pass is the late sweep for what dies afterwards.
+pub(crate) fn drop_unreferenced_scalar_types(module: &mut Module) {
+    let scalars: HashSet<Word> = module
+        .types_global_values
+        .iter()
+        .filter(|instruction| matches!(instruction.class.opcode, Op::TypeInt | Op::TypeFloat))
+        .filter_map(|instruction| instruction.result_id)
+        .collect();
+    if scalars.is_empty() {
+        return;
+    }
+    let mut referenced: HashSet<Word> = HashSet::new();
+    for instruction in module.all_inst_iter() {
+        // A name or a decoration describes a type; it does not use one.
+        if matches!(
+            instruction.class.opcode,
+            Op::Name | Op::MemberName | Op::Decorate | Op::MemberDecorate | Op::DecorateId
+        ) {
+            continue;
+        }
+        referenced.extend(instruction.result_type.filter(|ty| scalars.contains(ty)));
+        for operand in &instruction.operands {
+            if let Operand::IdRef(id) = operand {
+                if scalars.contains(id) && instruction.result_id != Some(*id) {
+                    referenced.insert(*id);
+                }
+            }
+        }
+    }
+    module.types_global_values.retain(|instruction| {
+        instruction
+            .result_id
+            .is_none_or(|id| !scalars.contains(&id) || referenced.contains(&id))
+    });
+    drop_dangling_debug(module);
+}
+
+/// Drop an allowlisted capability that nothing in the finished module requires.
+///
+/// The same shape as `drop_unused_scalar_width_capabilities` and for the same reason: a capability
+/// is requested where the need is PREDICTED -- by the emitter, or by an earlier phase -- and a later
+/// phase can delete the thing that needed it. `add_needed_capabilities` already computes several of
+/// these exact predicates from the finished module and uses each in the ADD direction only, so a
+/// folded-away `OpDemoteToHelperInvocation` left its capability behind.
+///
+/// The requirement is read from the grammar rather than restated, so there is no second table to
+/// drift: an instruction's own capabilities, every operand enumerant's, and the scalar-width one.
+/// A kept capability's transitive prerequisites are kept with it.
+///
+/// **Measured before this existed: 118 of the 14,579 corpus sources declared a capability nothing in
+/// the module asked for** -- 56 `DemoteToHelperInvocation`, 40 `ImageQuery`, 27 `FloatControls2`,
+/// 13 `GroupNonUniform*`, 9 `StorageImageExtendedFormats`, 9 `Image1D`, 1 `ImageBuffer`, plus the
+/// variable-pointer rows below.
+///
+/// `VariablePointers`/`VariablePointersStorageBuffer` cannot join the allowlist because the grammar
+/// does not encode their need: what asks for them is a POINTER-TYPED `OpPhi`/`OpSelect`/
+/// `OpPtrAccessChain`, and the grammar attaches nothing to those opcodes. They get their own
+/// predicate here instead, recomputed from the finished module, because the pipeline computes the
+/// requirement once and reapplies the SNAPSHOT afterwards -- so a pass that deleted the last pointer
+/// merge left the capability behind. **Measured: 1 of the 14,579 corpus sources.** A stale
+/// declaration is legal SPIR-V, but it demands the strictly stronger `variablePointers` feature of
+/// every consumer and cues native drivers down a variable-pointer compiler path.
+pub(crate) fn drop_unrequired_capabilities(module: &mut Module) {
+    let mut required: HashSet<spirv::Capability> = HashSet::new();
+    let mut required_extensions: HashSet<&'static str> = HashSet::new();
+    for instruction in module.all_inst_iter() {
+        // A DECLARATION is not a use. `OpCapability X` carries `Operand::Capability(X)`, whose
+        // grammar entry names the extension that enables X -- so counting it here would let every
+        // declaration justify its own extension, and nothing would ever be dropped.
+        if matches!(instruction.class.opcode, Op::Capability | Op::Extension) {
+            continue;
+        }
+        if let Some((capabilities, extensions)) =
+            crate::spirv_binary::instruction_declaration_requirements(instruction.class.opcode)
+        {
+            required.extend(capabilities.iter().copied());
+            required_extensions.extend(extensions.iter().copied());
+        }
+        for operand in &instruction.operands {
+            for requirement in crate::spirv_binary::operand_declaration_requirements(operand) {
+                required.extend(requirement.capabilities.iter().copied());
+                required_extensions.extend(requirement.extensions.iter().copied());
+            }
+        }
+        if let (Op::TypeInt | Op::TypeFloat, Some(&Operand::LiteralBit32(width))) =
+            (instruction.class.opcode, instruction.operands.first())
+        {
+            required.extend(crate::native::scalar_width_capability(
+                instruction.class.opcode,
+                width,
+            ));
+        }
+    }
+    // A capability that survives keeps whatever it is built on, however deep.
+    let mut frontier: Vec<spirv::Capability> = module
+        .capabilities
+        .iter()
+        .filter_map(|instruction| match instruction.operands.first() {
+            Some(&Operand::Capability(capability)) => Some(capability),
+            _ => None,
+        })
+        .filter(|capability| {
+            !GRAMMAR_COMPLETE_CAPABILITIES.contains(capability) || required.contains(capability)
+        })
+        .collect();
+    while let Some(capability) = frontier.pop() {
+        for requirement in
+            crate::spirv_binary::operand_declaration_requirements(&Operand::Capability(capability))
+        {
+            // A lone prerequisite is implied. Several are enabling alternatives, and the module
+            // already chose one by declaring it, so they are not prerequisites of this one.
+            if let [prerequisite] = requirement.capabilities {
+                if required.insert(*prerequisite) {
+                    frontier.push(*prerequisite);
+                }
+            }
+            required_extensions.extend(requirement.extensions.iter().copied());
+        }
+    }
+    let (needs_storage_buffer_pointers, needs_other_pointers) =
+        crate::spirv_variable_ptr::variable_pointer_requirement(module);
+    module
+        .capabilities
+        .retain(|instruction| match instruction.operands.first() {
+            Some(&Operand::Capability(spirv::Capability::VariablePointersStorageBuffer)) => {
+                needs_storage_buffer_pointers || needs_other_pointers
+            }
+            Some(&Operand::Capability(spirv::Capability::VariablePointers)) => needs_other_pointers,
+            Some(&Operand::Capability(capability)) => {
+                !GRAMMAR_COMPLETE_CAPABILITIES.contains(&capability)
+                    || required.contains(&capability)
+            }
+            _ => true,
+        });
+    // Dropping a capability strands whatever `OpExtension` existed only to enable it, and an
+    // unused extension is the same demand on the driver the capability was. Only extensions an
+    // allowlisted capability can ask for are candidates, so an extension a validation rule
+    // demands -- which the grammar cannot see -- is never a candidate.
+    let droppable_extensions: HashSet<&'static str> = GRAMMAR_COMPLETE_CAPABILITIES
+        .iter()
+        .flat_map(|capability| {
+            crate::spirv_binary::operand_declaration_requirements(&Operand::Capability(*capability))
+        })
+        .flat_map(|requirement| requirement.extensions.iter().copied())
+        .collect();
+    module
+        .extensions
+        .retain(|instruction| match instruction.operands.first() {
+            Some(Operand::LiteralString(extension)) => {
+                !droppable_extensions.contains(extension.as_str())
+                    || required_extensions.contains(extension.as_str())
+            }
+            _ => true,
+        });
+}
+
 pub(super) fn drop_unused_variable_pointer_capabilities(ctx: &mut Ctx) -> (bool, bool) {
+    crate::spirv_variable_ptr::lower_storage_buffer_pointer_phis(&mut ctx.module);
     crate::spirv_variable_ptr::lower_zero_base_storage_buffer_ptr_access_chains(&mut ctx.module);
     crate::spirv_variable_ptr::rewrite_storage_buffer_atomic_scopes(&mut ctx.module);
     let (needs_storage_buffer, needs_other) = needed_variable_pointer_capabilities(ctx);
@@ -325,32 +567,30 @@ pub(super) fn add_needed_capabilities(ctx: &mut Ctx, variable_pointer_requiremen
     if has_demote {
         want.push(Capability::DemoteToHelperInvocation);
     }
-    let has_sampled_1d = ctx.module.types_global_values.iter().any(|i| {
-        i.class.opcode == Op::TypeImage && i.operands.get(1) == Some(&Operand::Dim(Dim::Dim1D))
-    });
-    let has_storage_1d = ctx.module.types_global_values.iter().any(|i| {
-        i.class.opcode == Op::TypeImage
-            && i.operands.get(1) == Some(&Operand::Dim(Dim::Dim1D))
-            && i.operands.get(5) == Some(&Operand::LiteralBit32(2))
-    });
-    if has_sampled_1d {
+    // `Sampled1D`/`SampledBuffer` cover a SAMPLED image of that dimensionality; `Image1D`/
+    // `ImageBuffer` cover a storage one. They are separate capabilities, so a module holding only a
+    // storage image of that shape needs only the storage one. Asking for the sampled capability
+    // beside it asks the consumer for something the module cannot do.
+    //
+    // The storage arm always read operand 5 -- `Sampled`, where 2 means "used without a sampler" --
+    // and the sampled arm never did, so a `texture1d<..., access::write>` claimed both.
+    let image_dim = |dim: Dim, storage: bool| {
+        ctx.module.types_global_values.iter().any(|i| {
+            i.class.opcode == Op::TypeImage
+                && i.operands.get(1) == Some(&Operand::Dim(dim))
+                && (i.operands.get(5) == Some(&Operand::LiteralBit32(2))) == storage
+        })
+    };
+    if image_dim(Dim::Dim1D, false) {
         want.push(Capability::Sampled1D);
     }
-    if has_storage_1d {
+    if image_dim(Dim::Dim1D, true) {
         want.push(Capability::Image1D);
     }
-    let has_buffer_image = ctx.module.types_global_values.iter().any(|i| {
-        i.class.opcode == Op::TypeImage && i.operands.get(1) == Some(&Operand::Dim(Dim::DimBuffer))
-    });
-    let has_storage_buffer_image = ctx.module.types_global_values.iter().any(|i| {
-        i.class.opcode == Op::TypeImage
-            && i.operands.get(1) == Some(&Operand::Dim(Dim::DimBuffer))
-            && i.operands.get(5) == Some(&Operand::LiteralBit32(2))
-    });
-    if has_buffer_image {
+    if image_dim(Dim::DimBuffer, false) {
         want.push(Capability::SampledBuffer);
     }
-    if has_storage_buffer_image {
+    if image_dim(Dim::DimBuffer, true) {
         want.push(Capability::ImageBuffer);
     }
     let has_input_attachment_type = ctx.module.types_global_values.iter().any(|i| {
@@ -392,6 +632,16 @@ pub(super) fn add_needed_capabilities(ctx: &mut Ctx, variable_pointer_requiremen
             }
         }
     }
+    // `ViewIndex` is `[[amplification_id]]`: the view a multiview pass is rasterizing. The
+    // capability is core since SPIR-V 1.3, which every module this translator emits already is.
+    let has_view_index = ctx.module.annotations.iter().any(|instruction| {
+        instruction.class.opcode == Op::Decorate
+            && instruction.operands.get(1) == Some(&Operand::Decoration(Decoration::BuiltIn))
+            && instruction.operands.get(2) == Some(&Operand::BuiltIn(BuiltIn::ViewIndex))
+    });
+    if has_view_index {
+        want.push(Capability::MultiView);
+    }
     let has_clip_distance = ctx.module.annotations.iter().any(|instruction| {
         instruction.class.opcode == Op::Decorate
             && instruction.operands.get(1) == Some(&Operand::Decoration(Decoration::BuiltIn))
@@ -405,8 +655,33 @@ pub(super) fn add_needed_capabilities(ctx: &mut Ctx, variable_pointer_requiremen
             && instruction.operands.get(1) == Some(&Operand::Decoration(Decoration::BuiltIn))
             && instruction.operands.get(2) == Some(&Operand::BuiltIn(BuiltIn::PrimitiveId))
     });
-    if has_primitive_id {
-        want.push(Capability::Geometry);
+    // `PrimitiveId` is enabled by ANY of `Geometry`, `Tessellation`, `RayTracingKHR` or
+    // `MeshShadingEXT`. That is a disjunction, and choosing `Geometry` from it was the worst
+    // available answer twice over.
+    //
+    // A tessellation-evaluation entry already declares `Tessellation` above, so for 226 of the 236
+    // corpus modules that carried `Geometry` the requirement was ALREADY satisfied and the
+    // declaration bought nothing. What it cost is that Vulkan reads a declared capability as a
+    // demand: the consumer must enable `geometryShader`, and no Metal-backed implementation has one
+    // -- Metal has no geometry stage at all. Every one of those modules was unloadable on the very
+    // platform this translator targets, for a capability nothing in it uses.
+    //
+    // The remaining 10 are fragment entries reading `[[primitive_id]]`, where one disjunct does
+    // have to be declared. Neither `Geometry` nor `Tessellation` describes a fragment shader, so
+    // the choice is not between a right answer and a wrong one; it is between a disjunct every
+    // Metal-backed implementation supports and one none of them does.
+    if has_primitive_id
+        && !want.iter().any(|capability| {
+            matches!(
+                capability,
+                Capability::Geometry
+                    | Capability::Tessellation
+                    | Capability::RayTracingKHR
+                    | Capability::MeshShadingEXT
+            )
+        })
+    {
+        want.push(Capability::Tessellation);
     }
     let has_sample_id = ctx.module.annotations.iter().any(|instruction| {
         instruction.class.opcode == Op::Decorate
@@ -592,13 +867,24 @@ pub(super) fn add_needed_capabilities(ctx: &mut Ctx, variable_pointer_requiremen
                     | Op::GroupNonUniformBitwiseOr
                     | Op::GroupNonUniformBitwiseXor
             )
+            // These opcodes take their capability from the GROUP OPERATION, not from the opcode:
+            // `Reduce`/`InclusiveScan`/`ExclusiveScan` need `GroupNonUniformArithmetic`, and
+            // `ClusteredReduce` needs `GroupNonUniformClustered` instead. Every `air.simd_*`
+            // whole-simdgroup reduction emits the clustered form, so keying on the opcode alone
+            // demanded arithmetic subgroup support of 244 corpus modules that use none.
+            && !i.operands.iter().any(|o| {
+                matches!(
+                    o,
+                    Operand::GroupOperation(spirv::GroupOperation::ClusteredReduce)
+                )
+            })
         });
     if has_group_arithmetic {
         want.push(Capability::GroupNonUniform);
         want.push(Capability::GroupNonUniformArithmetic);
     }
-    // A `ClusteredReduce` group operation (emitted by the M-D2 `TransformOptions::simd_cluster32`
-    // simd lowering) additionally needs the `GroupNonUniformClustered` capability.
+    // A `ClusteredReduce` group operation (emitted by every `air.simd_*` whole-simdgroup
+    // reduction) additionally needs the `GroupNonUniformClustered` capability.
     let has_clustered_reduce = ctx
         .module
         .functions
@@ -686,6 +972,44 @@ pub(super) fn add_needed_capabilities(ctx: &mut Ctx, variable_pointer_requiremen
     if want.contains(&Capability::StencilExportEXT) {
         let ext = "SPV_EXT_shader_stencil_export";
         require_extension(ctx, ext);
+        // `StencilRefReplacingEXT` is to `FragStencilRefEXT` what `DepthReplacing` is to
+        // `FragDepth`: the declaration that this fragment shader replaces the value, without which
+        // a driver is entitled to keep the pipeline's. spirv-val does not demand it, so nothing
+        // caught its absence; glslang emits it for `gl_FragStencilRefARB` alongside exactly the
+        // capability and extension above, which is the answer this matches.
+        let entry_points: Vec<Word> = ctx
+            .module
+            .entry_points
+            .iter()
+            .filter(|instruction| {
+                instruction.operands.first()
+                    == Some(&Operand::ExecutionModel(spirv::ExecutionModel::Fragment))
+            })
+            .filter_map(|instruction| match instruction.operands.get(1) {
+                Some(&Operand::IdRef(entry)) => Some(entry),
+                _ => None,
+            })
+            .collect();
+        for entry in entry_points {
+            let declared = ctx.module.execution_modes.iter().any(|instruction| {
+                instruction.operands.as_slice()
+                    == [
+                        Operand::IdRef(entry),
+                        Operand::ExecutionMode(spirv::ExecutionMode::StencilRefReplacingEXT),
+                    ]
+            });
+            if !declared {
+                ctx.module.execution_modes.push(Instruction::new(
+                    Op::ExecutionMode,
+                    None,
+                    None,
+                    vec![
+                        Operand::IdRef(entry),
+                        Operand::ExecutionMode(spirv::ExecutionMode::StencilRefReplacingEXT),
+                    ],
+                ));
+            }
+        }
     }
 }
 
@@ -694,6 +1018,351 @@ mod tests {
     use super::*;
     use crate::spirv_module::Module;
     use crate::spirv_module::ModuleHeader;
+
+    /// A fragment module carrying `OpCapability DemoteToHelperInvocation` and its extension, with
+    /// `body` for the entry's only block.
+    fn module_with_demote_declared(body: Vec<Instruction>) -> Module {
+        use crate::spirv_module::{Block, Function};
+        let mut module = Module::new();
+        module.header = Some(ModuleHeader::new(10));
+        module.capabilities = vec![
+            Instruction::new(
+                Op::Capability,
+                None,
+                None,
+                vec![Operand::Capability(spirv::Capability::Shader)],
+            ),
+            Instruction::new(
+                Op::Capability,
+                None,
+                None,
+                vec![Operand::Capability(
+                    spirv::Capability::DemoteToHelperInvocation,
+                )],
+            ),
+        ];
+        module.extensions = vec![Instruction::new(
+            Op::Extension,
+            None,
+            None,
+            vec![Operand::LiteralString(
+                "SPV_EXT_demote_to_helper_invocation".to_string(),
+            )],
+        )];
+        module.types_global_values = vec![
+            Instruction::new(Op::TypeVoid, None, Some(1), vec![]),
+            Instruction::new(Op::TypeFunction, None, Some(2), vec![Operand::IdRef(1)]),
+            Instruction::new(Op::TypeBool, None, Some(3), vec![]),
+        ];
+        let mut instructions = body;
+        instructions.push(Instruction::new(Op::Return, None, None, vec![]));
+        module.functions = vec![Function {
+            def: Some(Instruction::new(
+                Op::Function,
+                Some(1),
+                Some(4),
+                vec![
+                    Operand::FunctionControl(spirv::FunctionControl::NONE),
+                    Operand::IdRef(2),
+                ],
+            )),
+            end: Some(Instruction::new(Op::FunctionEnd, None, None, vec![])),
+            parameters: vec![],
+            blocks: vec![Block {
+                label: Some(Instruction::new(Op::Label, None, Some(5), vec![])),
+                instructions,
+            }],
+        }];
+        module
+    }
+
+    fn declares(module: &Module, capability: spirv::Capability) -> bool {
+        module.capabilities.iter().any(|instruction| {
+            instruction.operands.first() == Some(&Operand::Capability(capability))
+        })
+    }
+
+    fn declares_extension(module: &Module, extension: &str) -> bool {
+        module.extensions.iter().any(|instruction| {
+            matches!(instruction.operands.first(), Some(Operand::LiteralString(name)) if name == extension)
+        })
+    }
+
+    /// A module declaring `Int64` plus an `OpTypeInt 64`, with `body` for the entry's only block.
+    fn module_with_int64_declared(body: Vec<Instruction>) -> Module {
+        use crate::spirv_module::{Block, Function};
+        let mut module = Module::new();
+        module.header = Some(ModuleHeader::new(10));
+        module.capabilities = vec![
+            Instruction::new(
+                Op::Capability,
+                None,
+                None,
+                vec![Operand::Capability(spirv::Capability::Shader)],
+            ),
+            Instruction::new(
+                Op::Capability,
+                None,
+                None,
+                vec![Operand::Capability(spirv::Capability::Int64)],
+            ),
+        ];
+        module.types_global_values = vec![
+            Instruction::new(Op::TypeVoid, None, Some(1), vec![]),
+            Instruction::new(Op::TypeFunction, None, Some(2), vec![Operand::IdRef(1)]),
+            Instruction::new(
+                Op::TypeInt,
+                None,
+                Some(3),
+                vec![Operand::LiteralBit32(64), Operand::LiteralBit32(0)],
+            ),
+        ];
+        // The kind of description that keeps a type alive through `gc_dead_globals` without
+        // anything using it.
+        module.debug_names = vec![Instruction::new(
+            Op::Name,
+            None,
+            None,
+            vec![
+                Operand::IdRef(3),
+                Operand::LiteralString("ulong".to_string()),
+            ],
+        )];
+        let mut instructions = body;
+        instructions.push(Instruction::new(Op::Return, None, None, vec![]));
+        module.functions = vec![Function {
+            def: Some(Instruction::new(
+                Op::Function,
+                Some(1),
+                Some(4),
+                vec![
+                    Operand::FunctionControl(spirv::FunctionControl::NONE),
+                    Operand::IdRef(2),
+                ],
+            )),
+            end: Some(Instruction::new(Op::FunctionEnd, None, None, vec![])),
+            parameters: vec![],
+            blocks: vec![Block {
+                label: Some(Instruction::new(Op::Label, None, Some(5), vec![])),
+                instructions,
+            }],
+        }];
+        module
+    }
+
+    fn declares_type(module: &Module, opcode: Op, width: u32) -> bool {
+        module.types_global_values.iter().any(|instruction| {
+            instruction.class.opcode == opcode
+                && instruction.operands.first() == Some(&Operand::LiteralBit32(width))
+        })
+    }
+
+    /// The scalar type is named but never used, so it goes -- and the capability it was the only
+    /// evidence for goes with it. Before the late pass existed, 30 of the 14,579 corpus sources
+    /// shipped `Int64` or `Int16` on exactly this basis: CFG construction deleted the last user
+    /// after `gc_dead_globals` had already run.
+    #[test]
+    fn a_scalar_type_nothing_uses_takes_its_capability_with_it() {
+        let mut module = module_with_int64_declared(vec![]);
+
+        drop_unreferenced_scalar_types(&mut module);
+        drop_unused_scalar_width_capabilities(&mut module);
+
+        assert!(!declares_type(&module, Op::TypeInt, 64));
+        assert!(!declares(&module, spirv::Capability::Int64));
+        assert!(
+            module.debug_names.is_empty(),
+            "the name that described it goes too"
+        );
+    }
+
+    /// The control: one instruction whose RESULT TYPE is the scalar keeps both.
+    #[test]
+    fn a_scalar_type_an_instruction_results_in_is_kept() {
+        let mut module =
+            module_with_int64_declared(vec![Instruction::new(Op::Undef, Some(3), Some(6), vec![])]);
+
+        drop_unreferenced_scalar_types(&mut module);
+        drop_unused_scalar_width_capabilities(&mut module);
+
+        assert!(declares_type(&module, Op::TypeInt, 64));
+        assert!(declares(&module, spirv::Capability::Int64));
+    }
+
+    /// Nothing in the module demotes, so neither the capability nor the extension that exists only
+    /// to enable it survives.
+    #[test]
+    fn a_capability_no_instruction_requires_is_dropped_with_its_extension() {
+        let mut module = module_with_demote_declared(vec![]);
+
+        drop_unrequired_capabilities(&mut module);
+
+        assert!(!declares(
+            &module,
+            spirv::Capability::DemoteToHelperInvocation
+        ));
+        assert!(!declares_extension(
+            &module,
+            "SPV_EXT_demote_to_helper_invocation"
+        ));
+        assert!(
+            declares(&module, spirv::Capability::Shader),
+            "a capability outside the allowlist is never a candidate"
+        );
+    }
+
+    /// `OpIsHelperInvocationEXT` needs the same capability `OpDemoteToHelperInvocation` does, and
+    /// the grammar says so, so reading the requirement from the grammar rather than restating it
+    /// keeps both. A hand-written "does the module demote?" predicate would drop them here.
+    #[test]
+    fn the_other_instruction_that_needs_a_capability_keeps_it() {
+        let mut module = module_with_demote_declared(vec![Instruction::new(
+            Op::IsHelperInvocationEXT,
+            Some(3),
+            Some(6),
+            vec![],
+        )]);
+
+        drop_unrequired_capabilities(&mut module);
+
+        assert!(declares(
+            &module,
+            spirv::Capability::DemoteToHelperInvocation
+        ));
+        assert!(declares_extension(
+            &module,
+            "SPV_EXT_demote_to_helper_invocation"
+        ));
+    }
+
+    /// A module declaring `VariablePointers`, with `body` for the entry's only block.
+    ///
+    /// Types for a `Workgroup` pointer are present either way, so what decides the capability is
+    /// the body -- which is the point: the grammar attaches nothing to `OpSelect`, so only a
+    /// pointer-typed one asks for this.
+    fn module_with_variable_pointers_declared(body: Vec<Instruction>) -> Module {
+        use crate::spirv_module::{Block, Function};
+        let (void, fn_ty, uint, pointer, a, b, cond) = (1, 2, 3, 4, 5, 6, 7);
+        let mut module = Module::new();
+        module.header = Some(ModuleHeader::new(20));
+        module.capabilities = [
+            spirv::Capability::Shader,
+            spirv::Capability::VariablePointersStorageBuffer,
+            spirv::Capability::VariablePointers,
+        ]
+        .into_iter()
+        .map(|capability| {
+            Instruction::new(
+                Op::Capability,
+                None,
+                None,
+                vec![Operand::Capability(capability)],
+            )
+        })
+        .collect();
+        module.types_global_values = vec![
+            Instruction::new(Op::TypeVoid, None, Some(void), vec![]),
+            Instruction::new(
+                Op::TypeFunction,
+                None,
+                Some(fn_ty),
+                vec![Operand::IdRef(void)],
+            ),
+            Instruction::new(
+                Op::TypeInt,
+                None,
+                Some(uint),
+                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
+            ),
+            Instruction::new(
+                Op::TypePointer,
+                None,
+                Some(pointer),
+                vec![
+                    Operand::StorageClass(spirv::StorageClass::Workgroup),
+                    Operand::IdRef(uint),
+                ],
+            ),
+            Instruction::new(
+                Op::Variable,
+                Some(pointer),
+                Some(a),
+                vec![Operand::StorageClass(spirv::StorageClass::Workgroup)],
+            ),
+            Instruction::new(
+                Op::Variable,
+                Some(pointer),
+                Some(b),
+                vec![Operand::StorageClass(spirv::StorageClass::Workgroup)],
+            ),
+            Instruction::new(Op::TypeBool, None, Some(cond), vec![]),
+            Instruction::new(Op::Undef, Some(cond), Some(8), vec![]),
+        ];
+        let mut instructions = body;
+        instructions.push(Instruction::new(Op::Return, None, None, vec![]));
+        module.functions = vec![Function {
+            def: Some(Instruction::new(
+                Op::Function,
+                Some(void),
+                Some(9),
+                vec![
+                    Operand::FunctionControl(spirv::FunctionControl::NONE),
+                    Operand::IdRef(fn_ty),
+                ],
+            )),
+            end: Some(Instruction::new(Op::FunctionEnd, None, None, vec![])),
+            parameters: vec![],
+            blocks: vec![Block {
+                label: Some(Instruction::new(Op::Label, None, Some(10), vec![])),
+                instructions,
+            }],
+        }];
+        module
+    }
+
+    /// The pipeline computes the variable-pointer requirement once and reapplies that snapshot after
+    /// later passes run, so a pass that deletes the last pointer merge leaves the capability behind.
+    /// Recomputing here is what makes the declaration a statement about the module that ships.
+    /// Measured over the corpus: 1 of 14,579 sources carried a `VariablePointers` nothing asked for.
+    #[test]
+    fn variable_pointers_goes_when_the_last_pointer_merge_does() {
+        // An OpSelect over plain integers is the same opcode with a non-pointer result type, which
+        // is exactly the distinction the grammar does not draw and this predicate must.
+        let mut module = module_with_variable_pointers_declared(vec![Instruction::new(
+            Op::Select,
+            Some(3),
+            Some(11),
+            vec![Operand::IdRef(8), Operand::IdRef(3), Operand::IdRef(3)],
+        )]);
+
+        drop_unrequired_capabilities(&mut module);
+
+        assert!(!declares(&module, spirv::Capability::VariablePointers));
+        assert!(!declares(
+            &module,
+            spirv::Capability::VariablePointersStorageBuffer
+        ));
+    }
+
+    /// The converse, and the reason the predicate cannot simply be "no pointer type in the module":
+    /// a `Workgroup` pointer select is what only full `VariablePointers` permits.
+    #[test]
+    fn a_workgroup_pointer_select_keeps_variable_pointers() {
+        let mut module = module_with_variable_pointers_declared(vec![Instruction::new(
+            Op::Select,
+            Some(4),
+            Some(11),
+            vec![Operand::IdRef(8), Operand::IdRef(5), Operand::IdRef(6)],
+        )]);
+
+        drop_unrequired_capabilities(&mut module);
+
+        assert!(declares(&module, spirv::Capability::VariablePointers));
+        assert!(declares(
+            &module,
+            spirv::Capability::VariablePointersStorageBuffer
+        ));
+    }
 
     /// A module whose entry point lists two descriptor variables while only one is still loaded.
     /// The second is what a pipeline boundary strands when a later rewrite deletes its last use.
@@ -911,6 +1580,120 @@ mod tests {
 
         assert!(ctx.module.types_global_values.is_empty());
         assert!(ctx.module.debug_names.is_empty());
+    }
+
+    /// A `Block`-decorated struct with `Offset`-decorated members describes a buffer layout. That
+    /// description is not a reason for the struct, or the member types it names, to exist: 26,233
+    /// struct declarations survived in 10,588 of the 14,579 corpus sources on exactly this basis.
+    #[test]
+    fn gc_drops_dead_struct_owned_only_by_its_block_and_offset_layout() {
+        let word = 1;
+        let structure = 2;
+        let mut module = Module::new();
+        module.header = Some(ModuleHeader::new(3));
+        module.types_global_values = vec![
+            Instruction::new(
+                Op::TypeInt,
+                None,
+                Some(word),
+                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
+            ),
+            Instruction::new(
+                Op::TypeStruct,
+                None,
+                Some(structure),
+                vec![Operand::IdRef(word), Operand::IdRef(word)],
+            ),
+        ];
+        module.annotations = vec![
+            Instruction::new(
+                Op::Decorate,
+                None,
+                None,
+                vec![
+                    Operand::IdRef(structure),
+                    Operand::Decoration(spirv::Decoration::Block),
+                ],
+            ),
+            Instruction::new(
+                Op::MemberDecorate,
+                None,
+                None,
+                vec![
+                    Operand::IdRef(structure),
+                    Operand::LiteralBit32(1),
+                    Operand::Decoration(spirv::Decoration::Offset),
+                    Operand::LiteralBit32(4),
+                ],
+            ),
+        ];
+        let mut ctx = Ctx::new(module);
+
+        gc_dead_globals(&mut ctx);
+
+        assert!(ctx.module.types_global_values.is_empty());
+        assert!(ctx.module.annotations.is_empty());
+    }
+
+    /// The control, and why the carve-out is an allowlist. `BuiltIn WorkgroupSize` on an otherwise
+    /// unreferenced constant IS the local size -- nothing else in the module records it -- so that
+    /// decoration has to stay a liveness root. Treating every decoration as description dropped the
+    /// constant and broke 9,857 of the 14,579 corpus sources on
+    /// `VUID-StandaloneSpirv-None-10685`.
+    #[test]
+    fn gc_keeps_the_constant_a_workgroup_size_decoration_names() {
+        let word = 1;
+        let vector = 2;
+        let one = 3;
+        let size = 4;
+        let mut module = Module::new();
+        module.header = Some(ModuleHeader::new(5));
+        module.types_global_values = vec![
+            Instruction::new(
+                Op::TypeInt,
+                None,
+                Some(word),
+                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
+            ),
+            Instruction::new(
+                Op::TypeVector,
+                None,
+                Some(vector),
+                vec![Operand::IdRef(word), Operand::LiteralBit32(3)],
+            ),
+            Instruction::new(
+                Op::Constant,
+                Some(word),
+                Some(one),
+                vec![Operand::LiteralBit32(1)],
+            ),
+            Instruction::new(
+                Op::ConstantComposite,
+                Some(vector),
+                Some(size),
+                vec![
+                    Operand::IdRef(one),
+                    Operand::IdRef(one),
+                    Operand::IdRef(one),
+                ],
+            ),
+        ];
+        module.annotations = vec![Instruction::new(
+            Op::Decorate,
+            None,
+            None,
+            vec![
+                Operand::IdRef(size),
+                Operand::Decoration(spirv::Decoration::BuiltIn),
+                Operand::BuiltIn(spirv::BuiltIn::WorkgroupSize),
+            ],
+        )];
+        let mut ctx = Ctx::new(module);
+
+        gc_dead_globals(&mut ctx);
+
+        assert_eq!(ctx.module.types_global_values.len(), 4);
+        assert_eq!(ctx.module.annotations.len(), 1);
     }
 
     #[test]

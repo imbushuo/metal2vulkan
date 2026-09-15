@@ -53,23 +53,45 @@ fn assert_no_pointer_bitcasts(spv: &[u8]) {
 
 fn assert_no_pointer_function_parameters(spv: &[u8]) {
     let module = load_bytes(spv).expect("load spv");
-    let pointer_types = module.types_global_values.iter().filter_map(|inst| {
-        (inst.class.opcode == Op::TypePointer).then_some(inst.result_id).flatten()
-    }).collect::<HashSet<_>>();
-    assert!(module.functions.iter().flat_map(|function| &function.parameters)
-        .all(|parameter| !parameter.result_type.is_some_and(|ty| pointer_types.contains(&ty))),
-        "opaque pointer wrappers must be lowered; pure arithmetic rounding helpers may remain");
+    let pointer_types = module
+        .types_global_values
+        .iter()
+        .filter_map(|inst| {
+            (inst.class.opcode == Op::TypePointer)
+                .then_some(inst.result_id)
+                .flatten()
+        })
+        .collect::<HashSet<_>>();
+    assert!(
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.parameters)
+            .all(|parameter| !parameter
+                .result_type
+                .is_some_and(|ty| pointer_types.contains(&ty))),
+        "opaque pointer wrappers must be lowered; pure arithmetic rounding helpers may remain"
+    );
 }
 
 fn assert_only_imageblock_identity_calls(spv: &[u8]) {
     assert_no_pointer_function_parameters(spv);
     let module = load_bytes(spv).expect("load spv");
-    let calls: Vec<_> = module.all_inst_iter()
-        .filter(|inst| inst.class.opcode == Op::FunctionCall).collect();
-    assert!(!calls.is_empty(), "the slice producer must carry executable provenance");
+    let calls: Vec<_> = module
+        .all_inst_iter()
+        .filter(|inst| inst.class.opcode == Op::FunctionCall)
+        .collect();
+    assert!(
+        !calls.is_empty(),
+        "the slice producer must carry executable provenance"
+    );
     for call in calls {
-        let Operand::IdRef(callee) = call.operands[0] else { panic!("call target") };
-        let function = module.functions.iter()
+        let Operand::IdRef(callee) = call.operands[0] else {
+            panic!("call target")
+        };
+        let function = module
+            .functions
+            .iter()
             .find(|function| function.def.as_ref().and_then(|inst| inst.result_id) == Some(callee))
             .expect("defined producer function");
         assert_eq!(function.parameters.len(), 3);
@@ -77,8 +99,10 @@ fn assert_only_imageblock_identity_calls(spv: &[u8]) {
         assert_eq!(function.blocks[0].instructions.len(), 1);
         let instruction = &function.blocks[0].instructions[0];
         assert_eq!(instruction.class.opcode, Op::ReturnValue);
-        assert_eq!(instruction.operands,
-            [Operand::IdRef(function.parameters[0].result_id.unwrap())]);
+        assert_eq!(
+            instruction.operands,
+            [Operand::IdRef(function.parameters[0].result_id.unwrap())]
+        );
     }
 }
 

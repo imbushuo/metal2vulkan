@@ -1,8 +1,9 @@
 //! Rewrite decoded AIR entry parameters into Vulkan stage-input and resource variables.
 
 use super::*;
-use crate::meta::primitive_air_type_from_name;
+use crate::meta::{primitive_air_type_from_name, ExecutionGroupFact};
 use crate::passes::access::{is_unsigned_byte_scalar, single_member_array_scalar_elem};
+use crate::passes::air_calls::subgroup_local_invocation_id_input_var;
 use crate::passes::stage_output::handle_static_sampler;
 mod decorations;
 mod kernel_grid;
@@ -30,7 +31,84 @@ pub(in crate::passes) use layout::{
 
 mod air_layout;
 pub(in crate::passes) use air_layout::*;
-const WORKGROUP_MEMORY_ELEMENTS: u32 = 512;
+/// Element count of a `[[threadgroup(n)]]` buffer's `Workgroup` array when the caller named no
+/// byte length for that index. Metal sizes threadgroup buffers at encode time and AIR records
+/// nothing about the length, so with no caller fact there is no length to derive -- this is a
+/// guess, and a binding longer than it is truncated with no diagnostic. Pass
+/// [`crate::passes::TransformOptions::threadgroup_memory_lengths`] to size the array exactly.
+const DEFAULT_WORKGROUP_MEMORY_ELEMENTS: u32 = 512;
+
+/// The most threadgroup memory a Metal compute pipeline may declare, on every Apple GPU family this
+/// translator targets.
+///
+/// A guess above this is not a more generous guess, it is an unloadable module: Metal refuses the
+/// pipeline outright with `Threadgroup memory size (40960) exceeds the maximum threadgroup memory
+/// allowed (32768)`, so nothing the shader would have done with the extra space can happen anyway.
+/// No caller can bind more than this either, which is why capping the guess cannot cost a
+/// configuration that exists.
+const MAX_WORKGROUP_MEMORY_BYTES: u32 = 32768;
+
+/// How many elements a `[[threadgroup(n)]]` buffer's `Workgroup` array holds. The caller's byte
+/// length for that Metal index wins; without one the array keeps `default_elements` -- either
+/// [`DEFAULT_WORKGROUP_MEMORY_ELEMENTS`] for an array this pass builds, or the length native
+/// emission already chose for a raw word array it keeps. A supplied length is rounded DOWN to
+/// whole elements, since a partial trailing element is not addressable, and a length too small to
+/// hold even one is refused rather than emitted as a zero-length array (which SPIR-V has no
+/// encoding for).
+///
+/// Both branches of the threadgroup binding answer to this one function on purpose. They used to
+/// answer to two: the raw branch kept native emission's fixed 2048-word array and never read
+/// `threadgroup_memory_lengths` at all, so a caller who bound more than 8192 bytes got a module
+/// that dispatched, validated and read zero past the guess. 142 of 14579 corpus sources emit that
+/// array.
+fn workgroup_array_elements(
+    ctx: &Ctx,
+    defs: &HashMap<Word, Instruction>,
+    element_ty: Word,
+    metal_index: Option<u32>,
+    param: Word,
+    default_elements: u32,
+) -> Result<u32, String> {
+    // `defs` was collected from the module before this pass began synthesizing types, and
+    // `spirv_size_align` answers `(4, 4)` for an id it cannot find. `element_ty` is very often one
+    // `build_workgroup_air_type` just built and put in `ctx.new_globals`, so asking `defs` alone
+    // sizes every AIR-layout element as one word: an 80-byte struct measured 4 bytes, and a caller
+    // who named 4096 bytes for it got 1024 elements -- 81920 bytes -- instead of 51.
+    let mut defs = defs.clone();
+    for instruction in &ctx.new_globals {
+        if let Some(id) = instruction.result_id {
+            defs.entry(id).or_insert_with(|| instruction.clone());
+        }
+    }
+    let (element_size, _) = layout_ty_size_align(ctx, element_ty, &defs);
+    let Some(length) = metal_index
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| ctx.threadgroup_memory_lengths.get(index))
+        .copied()
+        .flatten()
+    else {
+        // Only the GUESS is capped. A length the caller named is the caller's fact and is honoured
+        // as given, even past the device limit; a length nobody named is ours, and ours must at
+        // least name memory that can exist.
+        if element_size == 0 {
+            return Ok(default_elements);
+        }
+        let affordable = (MAX_WORKGROUP_MEMORY_BYTES / element_size).max(1);
+        return Ok(default_elements.min(affordable));
+    };
+    if element_size == 0 {
+        return Err(format!(
+            "threadgroup param {param} has a zero-sized element type, so its {length}-byte binding names no elements"
+        ));
+    }
+    let elements = length / element_size;
+    if elements == 0 {
+        return Err(format!(
+            "threadgroup param {param} is bound with {length} bytes, which is less than one {element_size}-byte element"
+        ));
+    }
+    Ok(elements)
+}
 
 /// What an entry parameter became, so the body can be patched to read from it.
 pub(in crate::passes) fn fragment_imageblock_projection_type_matches(
@@ -152,8 +230,11 @@ pub(in crate::passes) enum ParamBinding {
     },
     /// The pipeline-specialized local size, shaped as the AIR parameter type.
     LoadKernelLocalSize { out_ty: Word, lanes: u32 },
-    /// The number of 32-wide SIMD groups in the pipeline-specialized local size.
-    LoadKernelSimdgroupsPerThreadgroup { out_ty: Word },
+    /// `[[dispatch_threads_per_threadgroup]]`: the size the dispatch asked for, which a tail
+    /// region's smaller `LocalSize` must not change. See `KernRole::DispatchThreadsPerThreadgroup`.
+    LoadKernelRequestedLocalSize { out_ty: Word, lanes: u32 },
+    /// The number of whole `lanes`-wide AIR execution groups in the pipeline-specialized local size.
+    LoadKernelGroupsPerThreadgroup { out_ty: Word, lanes: u32 },
     /// An image variable (texture): param uses are the sample call's texture operand; replace param
     /// id with an OpLoad of the image at use. We record the var + image type + its (Dim, arrayed).
     Image {
@@ -322,6 +403,26 @@ pub(in crate::passes) enum BufWrap {
     },
 }
 
+/// Every id the module's instructions read as an operand.
+///
+/// Used to tell an entry parameter the body observes from one nothing mentions. A parameter's own
+/// `OpFunctionParameter` does not name it as an operand, and `OpName`/`OpDecorate` are not reads, so
+/// only the instruction stream is scanned -- a parameter absent from it cannot contribute a value to
+/// anything the module computes or stores.
+fn entry_parameters_read_by_the_body(module: &Module) -> HashSet<Word> {
+    module
+        .functions
+        .iter()
+        .flat_map(|function| function.blocks.iter())
+        .flat_map(|block| block.instructions.iter())
+        .flat_map(|instruction| instruction.operands.iter())
+        .filter_map(|operand| match operand {
+            Operand::IdRef(id) => Some(*id),
+            _ => None,
+        })
+        .collect()
+}
+
 fn required_resource_binding(param: Word, binding: Option<u32>) -> Result<u32, String> {
     binding.ok_or_else(|| {
         format!("descriptor-backed entry parameter %{param} has no AIR descriptor ABI binding")
@@ -403,13 +504,24 @@ pub(super) fn build_stage_input(
     // zero where the hardware would have given it a barycentric coordinate or a sample mask, and
     // the module validates, binds and reflects exactly as if nothing were missing. Reject those
     // instead, naming the role.
+    //
+    // Unless nothing reads the parameter. The refusal is about a VALUE the shader would observe, so
+    // its premise is that the zero reaches an instruction; a parameter no instruction in the module
+    // mentions has no such reach, and the entry's signature is not part of the Vulkan interface, so
+    // binding a zero to it changes nothing a consumer can see. That is not a guess about AIR's
+    // `air.arg_unused` marker — it is the emitted module's own use list.
     let unmodelled = match stage {
         Stage::Fragment => frag.map(|meta| meta.unmodelled_input_params.as_slice()),
         Stage::Vertex => vert.map(|meta| meta.unmodelled_input_params.as_slice()),
         Stage::Kernel => kern.map(|meta| meta.unmodelled_input_params.as_slice()),
     }
     .unwrap_or_default();
-    if let Some((param, role)) = unmodelled.first() {
+    let read_params = entry_parameters_read_by_the_body(&ctx.module);
+    if let Some((param, role)) = unmodelled.iter().find(|(param, _)| {
+        params
+            .get(*param as usize)
+            .is_some_and(|(pid, _)| read_params.contains(pid))
+    }) {
         return Err(format!(
             "entry parameter {param} declares AIR role `air.{role}`, which has no lowering; \
              emitting the module would silently read a zero in its place"
@@ -452,18 +564,39 @@ pub(super) fn build_stage_input(
         ));
     }
 
-    // An explicit imageblock is tile-local scratch, and the interface gives it Private storage,
-    // undefined on entry. `air.alias_implicit_imageblock` says its storage is the implicit
-    // imageblock instead -- the render targets the rasterizer has already written -- so the
-    // kernel's reads are of framebuffer content and its writes have to reach it. Private scratch
-    // is neither: the module validates and resolves an uninitialized array, and no descriptor even
-    // appears for a consumer to notice was missing.
-    if let Some(param) = kern.and_then(|meta| meta.aliased_implicit_imageblock_params.first()) {
-        return Err(format!(
-            "entry parameter {param} is an imageblock aliased onto the implicit imageblock, \
-             which this translator has no storage for; emitting the module would read tile-local \
-             scratch where the render targets should be"
-        ));
+    // `air.alias_implicit_imageblock` says an explicit imageblock's storage is not tile-local
+    // scratch but the implicit imageblock -- the render targets the rasterizer has already written
+    // -- so the kernel's reads are of framebuffer content and its writes have to reach it.
+    // `aliased_imageblock` gives the staging array both halves, but only for a member layout every
+    // member of which names a plane format. A member that names none has no descriptor to read or
+    // write, and staging it while its siblings reached the attachments is the silence the marker
+    // exists to prevent, so it is refused here rather than dropped there.
+    if let Some(meta) = kern {
+        for param in &meta.aliased_implicit_imageblock_params {
+            let Some(layout) = meta.imageblock_layouts.get(param) else {
+                return Err(format!(
+                    "entry parameter {param} is an imageblock aliased onto the implicit \
+                     imageblock and declares no member layout, so no render-target plane can be \
+                     matched to it"
+                ));
+            };
+            match crate::meta::aliased_imageblock_planes(layout) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err(format!(
+                        "entry parameter {param} is an imageblock aliased onto the implicit \
+                         imageblock and declares no members, so no render-target plane can be \
+                         matched to it"
+                    ))
+                }
+                Err(reason) => {
+                    return Err(format!(
+                        "entry parameter {param} is an imageblock aliased onto the implicit \
+                         imageblock: {reason}"
+                    ))
+                }
+            }
+        }
     }
 
     // `[[early_fragment_tests]]` runs the depth and stencil tests before the body, so the body
@@ -497,12 +630,15 @@ pub(super) fn build_stage_input(
                 Some(FragRole::SampleMaskIn) => s == "sample_mask_in",
                 Some(FragRole::ViewportArrayIndex) => s == "viewport_array_index",
                 Some(FragRole::RenderTargetArrayIndex) => s == "render_target_array_index",
+                Some(FragRole::AmplificationId) => s == "amplification_id",
+                Some(FragRole::AmplificationCount) => s == "amplification_count",
                 Some(FragRole::Varying(_)) => s == "varying",
                 Some(FragRole::Texture(_)) => s == "texture",
                 Some(FragRole::Sampler(_)) => s == "sampler",
                 Some(FragRole::Buffer(_)) => s == "buffer",
                 Some(FragRole::ColorInput(_)) => s == "color_input",
                 Some(FragRole::ImageblockData) => s == "imageblock_data",
+                Some(FragRole::VariantAbsentTexture) => s == "variant_absent_texture",
                 _ => s == "other",
             },
             Stage::Vertex => match vert.and_then(|m| m.role_of(idx)) {
@@ -518,6 +654,7 @@ pub(super) fn build_stage_input(
                 Some(VertRole::PatchId) => s == "patch_id",
                 Some(VertRole::AmplificationId) => s == "amplification_id",
                 Some(VertRole::AmplificationCount) => s == "amplification_count",
+                Some(VertRole::VariantAbsentTexture) => s == "variant_absent_texture",
                 _ => s == "other",
             },
             Stage::Kernel => match kern.and_then(|m| m.role_of(idx)) {
@@ -529,6 +666,9 @@ pub(super) fn build_stage_input(
                 Some(KernRole::Texture(_)) => s == "texture",
                 Some(KernRole::Sampler(_)) => s == "sampler",
                 Some(KernRole::ThreadsPerThreadgroup) => s == "threads_per_threadgroup",
+                Some(KernRole::DispatchThreadsPerThreadgroup) => {
+                    s == "dispatch_threads_per_threadgroup"
+                }
                 Some(KernRole::ThreadPositionInThreadgroup) => {
                     s == "thread_position_in_threadgroup"
                 }
@@ -536,19 +676,29 @@ pub(super) fn build_stage_input(
                 Some(KernRole::ThreadsPerGrid) => s == "threads_per_grid",
                 Some(KernRole::ThreadgroupPositionInGrid) => s == "threadgroup_position_in_grid",
                 Some(KernRole::ThreadIndexInThreadgroup) => s == "thread_index_in_threadgroup",
-                Some(KernRole::ThreadIndexInQuadgroup) => s == "thread_index_in_quadgroup",
-                Some(KernRole::QuadgroupIndexInThreadgroup) => {
-                    s == "quadgroup_index_in_threadgroup"
-                }
-                Some(KernRole::ThreadIndexInSimdgroup) => s == "thread_index_in_simdgroup",
-                Some(KernRole::SimdgroupIndexInThreadgroup) => {
-                    s == "simdgroup_index_in_threadgroup"
-                }
-                Some(KernRole::ThreadsPerSimdgroup) => s == "threads_per_simdgroup",
-                Some(KernRole::SimdgroupsPerThreadgroup) => s == "simdgroups_per_threadgroup",
                 Some(KernRole::ThreadPositionInGrid) => s == "thread_position_in_grid",
                 Some(KernRole::StageInput(_)) => s == "stage_in",
+                Some(KernRole::VariantAbsentTexture) => s == "variant_absent_texture",
                 _ => s == "other",
+            },
+        };
+        // The execution-group family is decoded from the marker's shape rather than named role by
+        // role, so it is queried once here rather than through the `role_is` string round-trip. A
+        // Metal simdgroup is the same thirty-two threads whichever entry declares it, so every stage
+        // asks; the decode has already dropped the facts a stage without a threadgroup cannot answer
+        // (see `ExecutionGroupFact::needs_a_threadgroup`), and those reach the unmodelled refusal.
+        let execution_group = match stage {
+            Stage::Fragment => match frag.and_then(|meta| meta.role_of(idx)) {
+                Some(FragRole::ExecutionGroup { fact, lanes }) => Some((*fact, *lanes)),
+                _ => None,
+            },
+            Stage::Vertex => match vert.and_then(|meta| meta.role_of(idx)) {
+                Some(VertRole::ExecutionGroup { fact, lanes }) => Some((*fact, *lanes)),
+                _ => None,
+            },
+            Stage::Kernel => match kern.and_then(|meta| meta.role_of(idx)) {
+                Some(KernRole::ExecutionGroup { fact, lanes }) => Some((*fact, *lanes)),
+                _ => None,
             },
         };
         let loc = match stage {
@@ -771,10 +921,16 @@ pub(super) fn build_stage_input(
                     runtime_specialization,
                 },
             ));
-            if wtex_dims.contains_key(pid) && frag.is_some_and(|meta| meta.raster_ordered_textures) {
+            if wtex_dims.contains_key(pid) && frag.is_some_and(|meta| meta.raster_ordered_textures)
+            {
                 ctx.module.annotations.push(Instruction::new(
-                    Op::Decorate, None, None,
-                    vec![Operand::IdRef(var), Operand::Decoration(Decoration::Coherent)],
+                    Op::Decorate,
+                    None,
+                    None,
+                    vec![
+                        Operand::IdRef(var),
+                        Operand::Decoration(Decoration::Coherent),
+                    ],
                 ));
             }
         } else if role_is("texture") && wtex_dims.contains_key(pid) {
@@ -800,8 +956,13 @@ pub(super) fn build_stage_input(
             decorate_binding(&mut ctx.module, var, descriptor_layout.set, binding);
             if frag.is_some_and(|meta| meta.raster_ordered_textures) {
                 ctx.module.annotations.push(Instruction::new(
-                    Op::Decorate, None, None,
-                    vec![Operand::IdRef(var), Operand::Decoration(Decoration::Coherent)],
+                    Op::Decorate,
+                    None,
+                    None,
+                    vec![
+                        Operand::IdRef(var),
+                        Operand::Decoration(Decoration::Coherent),
+                    ],
                 ));
             }
             ctx.interface_buffer_var(var);
@@ -920,10 +1081,36 @@ pub(super) fn build_stage_input(
             let layout_ty = kern
                 .and_then(|m| m.layout_of(idx))
                 .map(|layout| build_workgroup_air_type(ctx, layout));
-            let array_ty = if layout_ty.is_none() && is_raw_workgroup_array(&defs, pointee) {
+            let metal_index = kern.and_then(|m| match m.role_of(idx) {
+                Some(KernRole::Buffer(index)) => Some(*index),
+                _ => None,
+            });
+            let raw = (layout_ty.is_none() && is_raw_workgroup_array(&defs, pointee))
+                .then(|| array_type(&defs, pointee))
+                .flatten();
+            let (element_ty, default_elements) = match raw {
+                // Native emission already gave this param a raw word array and the body's access
+                // chains are typed against its element. Keep that element and only let the
+                // caller's byte length move the bound, so a caller who names none still gets the
+                // array the emitter built.
+                Some((elem, len)) => (elem, len),
+                None => (
+                    layout_ty.unwrap_or(pointee),
+                    DEFAULT_WORKGROUP_MEMORY_ELEMENTS,
+                ),
+            };
+            let elements = workgroup_array_elements(
+                ctx,
+                &defs,
+                element_ty,
+                metal_index,
+                *pid,
+                default_elements,
+            )?;
+            let array_ty = if elements == default_elements && raw.is_some() {
                 pointee
             } else {
-                ctx.ty_array(layout_ty.unwrap_or(pointee), WORKGROUP_MEMORY_ELEMENTS)
+                ctx.ty_array(element_ty, elements)
             };
             let ptr_ty = ctx.ty_ptr(StorageClass::Workgroup, array_ty);
             let var = ctx.module.fresh_id();
@@ -1531,6 +1718,60 @@ pub(super) fn build_stage_input(
             decorate_patch(&mut ctx.module, var);
             ctx.interface.push(var);
             bindings.push((*pid, ParamBinding::LoadVar { var, ty: *pty }));
+        } else if role_is("amplification_count") {
+            // `[[amplification_count]]` is the count the encoder set, which the caller states in
+            // `TransformOptions::vertex_amplification_count`. Vulkan has no view-count builtin to
+            // read it back from, and there was no arm here at all before this: the parameter fell
+            // through to `ZeroValue`, so 126 corpus vertex modules read a count of zero -- a value
+            // Metal never returns, since the encoder's minimum is one.
+            let val = ctx.const_int_of(*pty, i64::from(ctx.vertex_amplification_count));
+            bindings.push((*pid, ParamBinding::Value { val }));
+        } else if role_is("amplification_id") && ctx.vertex_amplification_count == 1 {
+            // One view is Metal's own default amplification count, and at one view the id is zero
+            // at every vertex by definition -- so the constant is the exact answer, not a weaker
+            // one. It also keeps the module free of the multiview interface, which matters because
+            // an entry that ALSO writes `[[render_target_array_index]]` would otherwise carry
+            // `ViewIndex` beside `Layer`. SPIRV-Cross renders a second
+            // `[[render_target_array_index]]` member for the view index, so Metal refuses the vertex
+            // function and MoltenVK cannot create the pipeline; 27 corpus vertex entries do both.
+            let val = ctx.const_int_of(*pty, 0);
+            bindings.push((*pid, ParamBinding::Value { val }));
+        } else if role_is("amplification_id") {
+            // `[[amplification_id]]` -> Input BuiltIn ViewIndex. Metal vertex amplification and
+            // Vulkan multiview are one feature under two names: the draw is rasterized into several
+            // views and the shader is told which one it is running for. Without this the parameter
+            // fell through to `ZeroValue` below, so every view of a stereo pair read view zero --
+            // and `amplification_id` was in the modelled-role inventory the whole time, so nothing
+            // refused it either. Tessellation evaluation keeps its own Location-based arm above:
+            // that stage is emulated on the vertex stage and receives the value as a patch input.
+            let uint_ty = ctx.ty_uint();
+            let pptr = ctx.ty_ptr(StorageClass::Input, uint_ty);
+            let var = ctx.module.fresh_id();
+            ctx.new_globals.push(Instruction::new(
+                Op::Variable,
+                Some(pptr),
+                Some(var),
+                vec![Operand::StorageClass(StorageClass::Input)],
+            ));
+            decorate_builtin(&mut ctx.module, var, BuiltIn::ViewIndex);
+            // An integer fragment Input cannot be interpolated (VUID-StandaloneSpirv-Flat-04744).
+            // A vertex Input takes no interpolation decoration at all.
+            if matches!(stage, Stage::Fragment) {
+                decorate_flat(&mut ctx.module, var);
+            }
+            ctx.interface.push(var);
+            if *pty == uint_ty {
+                bindings.push((*pid, ParamBinding::LoadVar { var, ty: uint_ty }));
+            } else {
+                bindings.push((
+                    *pid,
+                    ParamBinding::LoadVarConverted {
+                        var,
+                        load_ty: uint_ty,
+                        param_ty: *pty,
+                    },
+                ));
+            }
         } else if role_is("vertex_id") || role_is("instance_id") {
             // `[[vertex_id]]`/`[[instance_id]]` -> Input BuiltIn VertexIndex/InstanceIndex. Vulkan
             // requires this builtin to be a 32-bit int Input; the AIR `uint` param lowers to `%uint`,
@@ -1574,6 +1815,17 @@ pub(super) fn build_stage_input(
             bindings.push((
                 *pid,
                 ParamBinding::LoadKernelLocalSize {
+                    out_ty: *pty,
+                    lanes,
+                },
+            ));
+        } else if role_is("dispatch_threads_per_threadgroup") {
+            let lanes = scalar_or_vector_component(&defs, *pty)
+                .and_then(|(_, lanes)| lanes)
+                .unwrap_or(1);
+            bindings.push((
+                *pid,
+                ParamBinding::LoadKernelRequestedLocalSize {
                     out_ty: *pty,
                     lanes,
                 },
@@ -1690,79 +1942,53 @@ pub(super) fn build_stage_input(
                     },
                 ));
             }
-        } else if role_is("thread_index_in_quadgroup") {
+        } else if let Some((fact, lanes)) = execution_group {
+            // Every fact about an AIR execution group is one derivation over its width, and every
+            // width in `AIR_EXECUTION_GROUPS` is a power of two, so each derivation is exact.
+            //
+            // The LANE index inside the group is read off `SubgroupLocalInvocationId`, not off
+            // `LocalInvocationIndex`. That is the same lane every other Metal group lowering in this
+            // translator computes -- `air.simd_shuffle*`, `air.quad_shuffle*`, `air.quad_is_first`
+            // and the clustered reductions all partition the physical subgroup into Metal-width
+            // runs of `SubgroupLocalInvocationId` (see `reduce_bitops`). Deriving the declared
+            // `[[thread_index_in_simdgroup]]` from the THREADGROUP index instead made the module
+            // state a lane the shuffle beside it does not agree with, unless the driver happens to
+            // cut subgroups out of `LocalInvocationIndex` in order -- which Vulkan leaves
+            // implementation-defined. `air.simd_shuffle(v, tid_in_simdgroup)` has to be `v`.
+            //
+            // The GROUP index is a fact about the threadgroup, and `LocalInvocationIndex` is what
+            // states it: SPIR-V's `SubgroupId` counts physical subgroups, which are Metal groups
+            // only on a driver whose subgroup is exactly one Metal group wide.
             let uint_ty = ctx.ty_uint();
-            let var = bind_kernel_uint_builtin_once(
-                ctx,
-                &mut local_invocation_index_var,
-                BuiltIn::LocalInvocationIndex,
-            );
-            bindings.push((
-                *pid,
-                ParamBinding::LoadVarBitAnd {
-                    var,
+            let binding = match fact {
+                ExecutionGroupFact::ThreadIndexInGroup => ParamBinding::LoadVarBitAnd {
+                    var: subgroup_local_invocation_id_input_var(ctx, uint_ty),
                     load_ty: uint_ty,
                     param_ty: *pty,
-                    mask: 3,
+                    mask: lanes - 1,
                 },
-            ));
-        } else if role_is("quadgroup_index_in_threadgroup") {
-            let uint_ty = ctx.ty_uint();
-            let var = bind_kernel_uint_builtin_once(
-                ctx,
-                &mut local_invocation_index_var,
-                BuiltIn::LocalInvocationIndex,
-            );
-            bindings.push((
-                *pid,
-                ParamBinding::LoadVarShiftRight {
-                    var,
+                ExecutionGroupFact::GroupIndexInThreadgroup => ParamBinding::LoadVarShiftRight {
+                    var: bind_kernel_uint_builtin_once(
+                        ctx,
+                        &mut local_invocation_index_var,
+                        BuiltIn::LocalInvocationIndex,
+                    ),
                     load_ty: uint_ty,
                     param_ty: *pty,
-                    shift: 2,
+                    shift: lanes.trailing_zeros(),
                 },
-            ));
-        } else if role_is("thread_index_in_simdgroup") {
-            let uint_ty = ctx.ty_uint();
-            let var = bind_kernel_uint_builtin_once(
-                ctx,
-                &mut local_invocation_index_var,
-                BuiltIn::LocalInvocationIndex,
-            );
-            bindings.push((
-                *pid,
-                ParamBinding::LoadVarBitAnd {
-                    var,
-                    load_ty: uint_ty,
-                    param_ty: *pty,
-                    mask: 31,
+                ExecutionGroupFact::GroupsPerThreadgroup => {
+                    ParamBinding::LoadKernelGroupsPerThreadgroup {
+                        out_ty: *pty,
+                        lanes,
+                    }
+                }
+                ExecutionGroupFact::ThreadsPerGroup => ParamBinding::Value {
+                    val: const_kernel_local_size(ctx, &defs, *pty, [lanes, 1, 1])
+                        .unwrap_or_else(|| ctx.const_uint(lanes)),
                 },
-            ));
-        } else if role_is("simdgroup_index_in_threadgroup") {
-            let uint_ty = ctx.ty_uint();
-            let var = bind_kernel_uint_builtin_once(
-                ctx,
-                &mut local_invocation_index_var,
-                BuiltIn::LocalInvocationIndex,
-            );
-            bindings.push((
-                *pid,
-                ParamBinding::LoadVarShiftRight {
-                    var,
-                    load_ty: uint_ty,
-                    param_ty: *pty,
-                    shift: 5,
-                },
-            ));
-        } else if role_is("threads_per_simdgroup") {
-            let val = const_kernel_local_size(ctx, &defs, *pty, [32, 1, 1])
-                .unwrap_or_else(|| ctx.const_uint(32));
-            bindings.push((*pid, ParamBinding::Value { val }));
-        } else if role_is("simdgroups_per_threadgroup") {
-            bindings.push((
-                *pid,
-                ParamBinding::LoadKernelSimdgroupsPerThreadgroup { out_ty: *pty },
-            ));
+            };
+            bindings.push((*pid, binding));
         } else if role_is("thread_position_in_grid") {
             let var = bind_kernel_v3uint_builtin_once(
                 ctx,
@@ -2085,6 +2311,14 @@ pub(super) fn build_stage_input(
             // compiler even when spirv-val passes the undef. Bind it to a Private zero var instead so
             // the body reads zeros through a class NVIDIA compiles. Chains rewritten in apply_bindings.
             let var = ctx.zero_private_var(pointee);
+            // A texture the variant declares no slot for reaches here as an unmodeled pointer, the
+            // same as a buffer nothing recognized. Which one it was is the only evidence that tells
+            // an ABSENT resource apart from a handle the lowering lost, and it is available only
+            // here -- once the placeholder is a bare Private pointer the two look identical. See
+            // `air_calls::images::resolve::recovered_image_for_private_operand`.
+            if role_is("variant_absent_texture") {
+                ctx.variant_absent_texture_values.insert(var);
+            }
             bindings.push((*pid, ParamBinding::ZeroPointer { var }));
         } else {
             // Unmodeled parameter: bind a zero/undef value of its type so the body stays well-formed.
@@ -2138,9 +2372,7 @@ pub(super) fn build_stage_input(
 
     // Apply param bindings to the body: drop params, then splice replacements.
     apply_bindings(ctx, entry_idx, bindings, &buffer_structs, &all_defs)?;
-    if frag.is_some_and(|meta| {
-        meta.fragment_imageblock.is_some() || meta.raster_ordered_textures
-    }) {
+    if frag.is_some_and(|meta| meta.fragment_imageblock.is_some() || meta.raster_ordered_textures) {
         ctx.uses_pixel_interlock = true;
         ctx.fragment_imageblock_coord_var = fragcoord_var;
         let block = ctx.module.functions[entry_idx]

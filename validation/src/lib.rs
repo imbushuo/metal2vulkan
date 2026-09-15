@@ -24,6 +24,7 @@ pub mod source;
 pub mod store;
 pub mod translation_audit;
 pub mod triage;
+pub mod worker;
 
 use std::fs;
 use std::path::{Path, PathBuf};

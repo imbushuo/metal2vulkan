@@ -183,15 +183,46 @@ impl Emitter {
         // A cross-coordinate AIR imageblock is shared tile memory. APV supplies an explicit extent;
         // ordinary compute AIR supplies its row stride through `[[threads_per_threadgroup]]`. Both
         // forms allocate one complete metadata-typed cell per coordinate.
+        //
+        // Both forms also linearise `y * width + x`, which needs every coordinate to land inside one
+        // row of that width. An entry that stages a `k`x`k` block per thread has an imageblock `k`
+        // times wider than the threadgroup extent, and linearising it by that extent would land two
+        // cells one row apart on the same index -- one thread silently reading and writing
+        // another's staging. `imageblock_cell_scale` reads `k` off the coordinate; the stride and
+        // the cell count are multiplied by it below. `None` is an entry whose coordinates are not a
+        // linear function of a thread position at all, so no width bounds them, which stays refused.
+        if !self.ir.aliased_imageblock_planes.is_empty() && self.ir.imageblock_cell_scale != Some(1)
+        {
+            // One aliased cell is one render-target texel, so a thread that stages a `k`x`k` block
+            // owns `k * k` texels and the entry prologue would have to fill all of them. No corpus
+            // source does that, and staging the block without filling it reads scratch where the
+            // attachments should be -- the exact silence the alias marker exists to prevent.
+            return Err(format!(
+                "native emitter: an imageblock aliased onto the implicit imageblock stages {:?}                  cells per thread; only one cell per thread, which is one render-target texel, has                  a modelled correspondence to an attachment",
+                self.ir.imageblock_cell_scale
+            ));
+        }
+        let cell_scale = self.ir.imageblock_cell_scale.ok_or_else(|| {
+            "native emitter: an imageblock cell coordinate is not a linear function of a thread \
+             position, so the tile has no row stride that keeps every coordinate inside it and two \
+             of its cells would share one linearised index"
+                .to_string()
+        })?;
         let (cell_count, width_id) = if let Some([width, height]) = self.ir.imageblock_dimensions {
+            // An APV extent is the whole tile already, scale included.
             let cell_count = width
                 .checked_mul(height)
                 .ok_or_else(|| "native emitter: imageblock cell count overflows".to_string())?;
             (cell_count, self.const_uint(width)?)
         } else {
+            // No stated extent, so the tile is bounded by the threadgroup memory it may occupy
+            // rather than by a cell count: how many cells that is depends on how wide one is, and
+            // on how many of them each thread owns.
+            let cell_bytes = self.imageblock_cell_allocation_size(&pointee)?;
+            let width = self.emit_imageblock_threadgroup_width(instructions)?;
             (
-                crate::native::imageblock::CELL_CAPACITY,
-                self.emit_imageblock_threadgroup_width(instructions)?,
+                crate::native::imageblock::cell_capacity(cell_bytes, cell_scale),
+                self.emit_scaled_imageblock_width(width, cell_scale, instructions)?,
             )
         };
         let array = LlType::Array(Box::new(pointee.clone()), cell_count);
@@ -209,6 +240,9 @@ impl Emitter {
             self.imageblock_data_scratch = Some((storage, pointee.clone()));
             storage
         };
+        if !self.ir.aliased_imageblock_planes.is_empty() {
+            self.emit_sidecar.aliased_imageblock_staging = Some(storage);
+        }
 
         let coordinate = call
             .args
@@ -302,18 +336,82 @@ impl Emitter {
         Ok(true)
     }
 
+    /// The threadgroup-memory footprint of one imageblock cell, in bytes.
+    ///
+    /// The cell is the metadata-typed imageblock struct the tile array is an array of, so its
+    /// allocation size -- its natural size rounded to its own alignment, which is what an
+    /// `OpTypeArray` of it strides by -- is what divides the tile budget into cells.
+    fn imageblock_cell_allocation_size(&mut self, pointee: &LlType) -> Result<u32, String> {
+        let cell_ty = self.type_id(pointee)?;
+        let defs = self
+            .module
+            .types_global_values
+            .iter()
+            .filter_map(|instruction| instruction.result_id.map(|id| (id, instruction.clone())))
+            .collect::<HashMap<_, _>>();
+        let (size, align) = crate::layout::spirv_size_align(
+            cell_ty,
+            &defs,
+            crate::layout::SpirvLayout::natural(self.air_data_layout.as_ref()),
+        );
+        Ok(crate::layout::round_up_u32(size, align.max(1)))
+    }
+
+    /// Widen a threadgroup row stride into the imageblock's, which is `scale` times it in each axis.
+    ///
+    /// At the usual `scale` of 1 the tile IS the threadgroup and the stride is returned untouched,
+    /// so an entry that stages one cell per thread emits exactly what it emitted before.
+    fn emit_scaled_imageblock_width(
+        &mut self,
+        width: Word,
+        scale: u32,
+        instructions: &mut Vec<Instruction>,
+    ) -> Result<Word, String> {
+        if scale == 1 {
+            return Ok(width);
+        }
+        let uint_ty = self.type_id(&LlType::Int(32))?;
+        let scale_id = self.const_uint(scale)?;
+        let scaled = self.fresh();
+        instructions.push(Self::inst(
+            Op::IMul,
+            Some(uint_ty),
+            Some(scaled),
+            vec![Operand::IdRef(width), Operand::IdRef(scale_id)],
+        ));
+        Ok(scaled)
+    }
+
     pub(in crate::native::emitter) fn emit_imageblock_threadgroup_width(
         &mut self,
         instructions: &mut Vec<Instruction>,
     ) -> Result<Word, String> {
-        let param_name = self
-            .ir
-            .imageblock_threads_per_threadgroup_param
-            .clone()
-            .ok_or_else(|| {
-                "native emitter: cross-coordinate imageblock has no threads_per_threadgroup parameter"
-                    .to_string()
-            })?;
+        let Some(param_name) = self.ir.imageblock_threads_per_threadgroup_param.clone() else {
+            // No `[[threads_per_threadgroup]]` parameter to read the stride from. The tile width is
+            // still a known fact, just not one this layer holds: ask `air.get_imageblock_width`,
+            // which the pass answers from `TransformOptions::kernel_local_size`. The IR declares
+            // that intrinsic for exactly this case (`IMAGEBLOCK_WIDTH_INTRINSIC`), so a module that
+            // reaches here without the declaration is one this emitter must still refuse.
+            let callee = *self
+                .function_ids
+                .get(crate::native::ir::IMAGEBLOCK_WIDTH_INTRINSIC)
+                .ok_or_else(|| {
+                    "native emitter: a cross-coordinate imageblock has no row stride; the entry \
+                     declares neither an APV imageblock extent nor a `[[threads_per_threadgroup]]` \
+                     parameter, and emitting the module would resolve every tile coordinate to one \
+                     per-invocation slot"
+                        .to_string()
+                })?;
+            let uint_ty = self.type_id(&LlType::Int(32))?;
+            let width = self.fresh();
+            instructions.push(Self::inst(
+                Op::FunctionCall,
+                Some(uint_ty),
+                Some(width),
+                vec![Operand::IdRef(callee)],
+            ));
+            return Ok(width);
+        };
         let (param_id, param_ty) = self.values.get(&param_name).cloned().ok_or_else(|| {
             format!(
                 "native emitter: imageblock threads_per_threadgroup value {param_name} is unavailable"
@@ -474,6 +572,7 @@ impl Emitter {
             }
             if let Some(id) = self.raw_device_call_arg_id(
                 &call.callee,
+                index,
                 &param_name,
                 &param_ty,
                 &arg,
@@ -481,6 +580,35 @@ impl Emitter {
             )? {
                 ids.push(id);
                 continue;
+            }
+            // A descriptor-backed pointer whose byte cursor could not be carried onto the
+            // parameter above has a `Private` zero placeholder as its ordinary SSA value: the real
+            // root and offset live in `raw_offsets`, which is emitter state, not a SPIR-V value.
+            // Handing that placeholder to the callee is not an approximation, it is a silent loss --
+            // the emitted-graph inliner substitutes it faithfully and every load and store the
+            // callee makes through the parameter lands in scratch. Refuse instead; a pointer the
+            // emitter genuinely cannot address at all has no `raw_offsets` entry and is unaffected.
+            if let (LlValue::Local(arg_name), LlType::Ptr(_)) =
+                (&arg.value, self.resolve_type(&param_ty)?)
+            {
+                if self.unmodeled_pointers.contains(arg_name)
+                    && self
+                        .raw_offsets
+                        .get(arg_name)
+                        .is_some_and(|raw| !raw.unmodelable)
+                    && self.ir.param_is_dereferenced(&call.callee, &param_name)
+                {
+                    // Record the site before refusing: with no boundary there is no cursor to
+                    // carry, and the AIR-text retry inlines exactly this call to remove it.
+                    self.cursor_call_sites
+                        .insert((call.callee.clone(), arg_name.clone()));
+                    return Err(format!(
+                        "native emitter: helper @{} parameter {param_name} is passed a \
+                         descriptor-backed pointer whose byte cursor cannot cross the call; the \
+                         callee would read and write scratch where Metal reaches the buffer",
+                        call.callee
+                    ));
+                }
             }
             ids.push(self.value_id_in(&arg.value, &arg.ty, instructions)?);
         }
@@ -682,6 +810,7 @@ impl Emitter {
     pub(in crate::native::emitter) fn raw_device_call_arg_id(
         &mut self,
         callee: &str,
+        param_index: usize,
         param_name: &str,
         param_ty: &LlType,
         arg: &TypedValue,
@@ -697,8 +826,17 @@ impl Emitter {
         let LlType::Ptr(param_addrspace) = self.resolve_type(param_ty)? else {
             return Ok(None);
         };
-        if param_addrspace != 1 {
-            return Ok(None); // device buffers only; the workgroup case is handled separately
+        if !matches!(param_addrspace, 1 | 2) {
+            return Ok(None); // descriptor-backed buffers only; workgroup is handled separately
+        }
+        // Metal's `constant` space (`addrspace(2)`) is descriptor-backed exactly like `device`, so
+        // a member pointer into a uniform struct has the same Private placeholder VALUE and the
+        // same need to reach the helper as a cursor on the real root. It differs in one way that
+        // matters here: the SAME helper is routinely called with several members of one struct,
+        // and only one cursor per parameter can be recorded. Admit only the shape where a second,
+        // conflicting cursor cannot exist.
+        if param_addrspace == 2 && !self.constant_call_cursor_cannot_conflict(callee, param_index) {
+            return Ok(None);
         }
         let LlValue::Local(arg_name) = &arg.value else {
             return Ok(None);
@@ -718,7 +856,7 @@ impl Emitter {
                 .materialize_device_address(&address_raw, instructions)
                 .map(Some);
         }
-        if raw.addrspace != 1
+        if !matches!(raw.addrspace, 1 | 2)
             || !raw.dyn_terms.is_empty()
             || raw.unmodelable
             || raw.device_addr_base.is_some()
@@ -726,7 +864,7 @@ impl Emitter {
             return Ok(None);
         }
         let root = raw.root.clone();
-        if !self.param_values.contains(&root) || !self.raw_buffer_params.contains(&root) {
+        if !self.param_values.contains(&root) || !self.is_raw_buffer_param(&root) {
             return Ok(None);
         }
         let key = (callee.to_string(), param_name.to_string());
@@ -745,6 +883,30 @@ impl Emitter {
         }
         let id = self.value_id_in(&LlValue::Local(root), &arg.ty, instructions)?;
         Ok(Some(id))
+    }
+
+    /// Whether the cursor recorded for a `constant`-space helper parameter cannot be contradicted
+    /// by a second call site.
+    ///
+    /// Metal's `constant` space carries whole uniform STRUCTS, and a helper that takes one member
+    /// of a struct is routinely called again with a DIFFERENT member of the same struct: over the
+    /// corpus, 33 sources call a constant helper parameter at two different byte cursors, where
+    /// only one cursor can be recorded. Only the first call site's cursor would survive, and the
+    /// second would read at the wrong offset, so admit only the shape where that cannot happen.
+    ///
+    /// One call site is the easy case. Beyond that, all the call sites have to be in ONE caller --
+    /// a local name means nothing across functions -- and each of them has to name the parameter's
+    /// argument the same way: the same local, or the same all-constant `getelementptr` off the same
+    /// base. Identical chains address identical bytes, which is stronger than comparing the offsets
+    /// and does not re-derive the AIR layout to find out.
+    fn constant_call_cursor_cannot_conflict(&mut self, callee: &str, param_index: usize) -> bool {
+        if self.agreeing_constant_call_cursors.is_none() {
+            self.agreeing_constant_call_cursors = Some(agreeing_constant_call_cursors(&self.ir));
+        }
+        self.agreeing_constant_call_cursors
+            .as_ref()
+            .expect("just set")
+            .contains(&(callee.to_string(), param_index))
     }
 
     pub(in crate::native::emitter) fn raw_workgroup_call_arg_id(
@@ -888,4 +1050,93 @@ fn decayed_global_call_arg_indices(
         }
         _ => None,
     }
+}
+
+/// For each `(callee, parameter index)`, whether every call site in the module names that argument
+/// the same byte. See [`Emitter::constant_call_cursor_cannot_conflict`] for why this is the gate.
+///
+/// A callee called once qualifies on every parameter. Otherwise the call sites must share one
+/// caller function, and each parameter is judged on its own: the arguments must all reduce to the
+/// same key, where a local's key is its own name unless it is defined by an all-constant
+/// `getelementptr`, in which case it is that chain. An argument that is not a local disqualifies
+/// the parameter, because only a local can carry a `raw_offsets` cursor at all.
+fn agreeing_constant_call_cursors(ir: &LlModule) -> HashSet<(String, usize)> {
+    let mut sites: HashMap<&str, Vec<(&str, &LlCall)>> = HashMap::new();
+    for function in &ir.functions {
+        for instruction in function.carrier_insts() {
+            if let Some(call) = instruction.alias_call() {
+                sites
+                    .entry(call.callee.as_str())
+                    .or_default()
+                    .push((function.name.as_str(), call));
+            }
+        }
+    }
+    let mut agreeing = HashSet::new();
+    for (callee, calls) in sites {
+        let arity = calls
+            .iter()
+            .map(|(_, call)| call.args.len())
+            .max()
+            .unwrap_or(0);
+        if calls.len() == 1 {
+            agreeing.extend((0..arity).map(|index| (callee.to_string(), index)));
+            continue;
+        }
+        let (first_caller, _) = calls[0];
+        if calls.iter().any(|(caller, _)| *caller != first_caller) {
+            continue;
+        }
+        let Some(caller) = ir.functions.iter().find(|f| f.name == first_caller) else {
+            continue;
+        };
+        let mut definitions: HashMap<&str, &LlGep> = HashMap::new();
+        for instruction in caller.carrier_insts() {
+            if let (Some(result), Some(gep)) = (&instruction.result, instruction.gep().as_deref()) {
+                definitions.insert(result.as_str(), gep);
+            }
+        }
+        for index in 0..arity {
+            let mut keys = calls.iter().map(|(_, call)| {
+                call.args.get(index).and_then(|arg| match &arg.value {
+                    LlValue::Local(name) => Some(constant_cursor_key(name, &definitions)),
+                    _ => None,
+                })
+            });
+            let Some(Some(first)) = keys.next() else {
+                continue;
+            };
+            if keys.all(|key| key.as_ref() == Some(&first)) {
+                agreeing.insert((callee.to_string(), index));
+            }
+        }
+    }
+    agreeing
+}
+
+/// The bytes a pointer local names, as a comparable key: the chain if it is an all-constant
+/// `getelementptr`, and the local's own name otherwise. Two equal keys address equal bytes.
+fn constant_cursor_key(name: &str, definitions: &HashMap<&str, &LlGep>) -> String {
+    let Some(gep) = definitions.get(name) else {
+        return name.to_string();
+    };
+    let LlValue::Local(base) = &gep.base.value else {
+        return name.to_string();
+    };
+    if !gep.indices.iter().all(|index| {
+        matches!(
+            index.value,
+            LlValue::Int(_) | LlValue::Hex(_) | LlValue::SignedInt(_) | LlValue::Zero
+        )
+    }) {
+        return name.to_string();
+    }
+    format!(
+        "gep {base} {:?} {:?}",
+        gep.source_ty,
+        gep.indices
+            .iter()
+            .map(|index| &index.value)
+            .collect::<Vec<_>>()
+    )
 }

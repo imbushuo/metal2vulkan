@@ -6,9 +6,8 @@ standalone crate.
 ## Prerequisites
 
 - Rust stable (see `rust-version` in `Cargo.toml`)
-- External tools used by some paths:
-  - `llvm-dis` (LLVM)
-  - `spirv-val` (SPIRV-Tools)
+- A C++17 compiler for Cargo's statically linked SPIRV-Tools build
+- LLVM's shared library for bitcode I/O tests
 - A Vulkan ICD or Metal-capable macOS host only for explicit machine-specific authored-case runs
 
 ## Repository layout
@@ -41,23 +40,24 @@ standalone crate.
 # format
 cargo fmt --all
 
-# clippy (CI denies warnings)
-cargo clippy --workspace --all-targets -- -D warnings
+# clippy (CI denies warnings); --all-features also covers the `serde` cfg the CLI ships with
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # public Rustdoc, including feature-gated APIs (CI denies warnings)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
 
 # unit + integration tests (Cargo defaults to the available logical CPU count)
-cargo test -p metal2vulkan
+cargo test -p metal2vulkan --all-features
 
 # optional validation package
-cargo test -p metal2vulkan-validation
+cargo test -p metal2vulkan-validation --all-features
 ```
 
-External tools used by some paths: `llvm-dis`, `spirv-val` (and friends). On macOS with Homebrew:
+Translation and its Rust tests launch no LLVM/SPIR-V executables. On macOS with Homebrew:
 
 ```sh
-PATH=/opt/homebrew/opt/llvm/bin:$PATH cargo test -p metal2vulkan
+brew install llvm
+cargo test -p metal2vulkan --all-features
 ```
 
 GPU-free byte A/B is provided by `corpus-ab` in the validation crate.
@@ -93,7 +93,7 @@ Quick anchors:
 
 ```sh
 # always
-cargo test -p metal2vulkan
+cargo test -p metal2vulkan --all-features
 
 # before/after a byte-stable refactor
 cp target/release/metal2vulkan ./m2v-old

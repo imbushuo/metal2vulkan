@@ -71,7 +71,13 @@ pub(crate) fn specialize_air_function_constants<'a>(
                     )
                 })?;
                 output.push_str(result);
-                output.push_str(" = icmp eq i1 true, true");
+                // A supplied constant IS defined, so this call becomes an `i1` that is always
+                // true. Spell that with INTEGER operands: everything downstream models the AIR
+                // Metal actually emits, and no corpus source compares `i1` values, so
+                // `int_compare_result_type` refuses `icmp ... i1` outright. Metal's implicit
+                // function-constant predicate initializer parks this value in a global the entry
+                // never reads, so nothing folds the comparison away before the emitter sees it.
+                output.push_str(" = icmp eq i32 0, 0");
                 if line.ends_with('\n') {
                     output.push('\n');
                 }
@@ -249,12 +255,12 @@ define void @init() {
         .expect("specialize");
         assert!(specialized.contains("constant i8 1, section"));
         assert!(specialized.contains("constant <2 x i32> <i32 7, i32 11>, section"));
-        assert!(specialized.contains("%defined = icmp eq i1 true, true"));
+        assert!(specialized.contains("%defined = icmp eq i32 0, 0"));
 
         let supplied_zero = specialize_air_function_constants(ll, &[(0, vec![0])])
             .expect("specialize a defined false value");
         assert!(supplied_zero.contains("constant i8 0, section"));
-        assert!(supplied_zero.contains("%defined = icmp eq i1 true, true"));
+        assert!(supplied_zero.contains("%defined = icmp eq i32 0, 0"));
     }
 
     #[test]

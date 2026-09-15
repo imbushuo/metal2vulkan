@@ -234,6 +234,7 @@ pub(in crate::passes) fn build_pixel_fetch_coord_from_parts(
         };
         let comp = clamp_pixel_coord_component_finite(
             ctx,
+            sampler_state,
             comp,
             size,
             spatial > 1 || arrayed,

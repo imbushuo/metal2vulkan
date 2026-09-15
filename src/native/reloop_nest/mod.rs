@@ -283,63 +283,16 @@ fn successors_of(block: &crate::spirv_module::Block) -> Vec<Word> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    fn scratch() -> std::path::PathBuf {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "metal2vulkan_reloop_nest_{}_{}",
-            std::process::id(),
-            n
-        ));
-        let _ = std::fs::create_dir_all(&dir);
-        dir
-    }
-
-    /// Assemble spvasm through the local `spirv-as`; `None` when the toolchain is absent so the
-    /// test no-ops rather than failing for an unrelated reason.
-    fn assemble(spvasm: &str) -> Option<Vec<u8>> {
-        if std::process::Command::new("spirv-as")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return None;
-        }
-        let dir = scratch();
-        let source = dir.join("in.spvasm");
-        let out = dir.join("in.spv");
-        std::fs::write(&source, spvasm).unwrap();
-        let status = std::process::Command::new("spirv-as")
-            .args(["--target-env", crate::tools::VULKAN_TARGET_ENV])
-            .arg(&source)
-            .arg("-o")
-            .arg(&out)
-            .output()
-            .unwrap();
-        assert!(
-            status.status.success(),
-            "spirv-as: {}",
-            String::from_utf8_lossy(&status.stderr)
-        );
-        Some(std::fs::read(&out).unwrap())
+    fn assemble(spvasm: &str) -> Vec<u8> {
+        crate::tools::spirv_assemble(spvasm).expect("assemble")
     }
 
     fn validates(spv: &[u8]) -> bool {
-        let dir = scratch();
-        let path = dir.join("m.spv");
-        std::fs::write(&path, spv).unwrap();
-        let status = std::process::Command::new("spirv-val")
-            .args(["--target-env", crate::tools::VULKAN_TARGET_ENV])
-            .arg(&path)
-            .output()
-            .unwrap();
-        if !status.status.success() {
-            eprintln!("spirv-val: {}", String::from_utf8_lossy(&status.stderr));
+        let result = crate::tools::spirv_val_bytes(spv, std::path::Path::new(""));
+        if let Err(error) = &result {
+            eprintln!("{error}");
         }
-        status.status.success()
+        result.is_ok()
     }
 
     /// Nest every function of `spv` and return the reassembled module, or `None` when the
@@ -366,14 +319,7 @@ mod tests {
     }
 
     fn disassemble(spv: &[u8]) -> String {
-        let dir = scratch();
-        let path = dir.join("m.spv");
-        std::fs::write(&path, spv).unwrap();
-        let output = std::process::Command::new("spirv-dis")
-            .arg(&path)
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&output.stdout).into_owned()
+        crate::disassemble(spv).expect("disassemble")
     }
 
     const LOOP_WITH_PHI: &str = r#"
@@ -410,9 +356,7 @@ mod tests {
 
     #[test]
     fn nested_loop_with_phi_is_structured_and_validates() {
-        let Some(spv) = assemble(LOOP_WITH_PHI) else {
-            return;
-        };
+        let spv = assemble(LOOP_WITH_PHI);
         let nested = nested_bytes(&spv).expect("reducible control flow is nested");
         assert!(validates(&nested));
         let asm = disassemble(&nested);
@@ -423,9 +367,7 @@ mod tests {
 
     #[test]
     fn nesting_keeps_ordinary_values_in_registers() {
-        let Some(spv) = assemble(LOOP_WITH_PHI) else {
-            return;
-        };
+        let spv = assemble(LOOP_WITH_PHI);
         let nested = nested_bytes(&spv).expect("nested");
         assert!(validates(&nested));
         let asm = disassemble(&nested);
@@ -470,9 +412,7 @@ mod tests {
 
     #[test]
     fn nesting_declines_a_use_its_definition_does_not_dominate() {
-        let Some(spv) = assemble(USE_WITHOUT_DOMINATING_DEFINITION) else {
-            return;
-        };
+        let spv = assemble(USE_WITHOUT_DOMINATING_DEFINITION);
         assert!(
             nested_bytes(&spv).is_none(),
             "a function whose value flow the nesting cannot honour must stay on the state machine"
@@ -520,9 +460,7 @@ mod tests {
 
     #[test]
     fn a_break_leaving_two_constructs_is_staged_and_validates() {
-        let Some(spv) = assemble(NESTED_BREAK) else {
-            return;
-        };
+        let spv = assemble(NESTED_BREAK);
         let nested = nested_bytes(&spv).expect("reducible control flow is nested");
         assert!(validates(&nested));
         let asm = disassemble(&nested);
@@ -557,9 +495,7 @@ mod tests {
         // spirv-as accepts this only because the module is not validated at assembly time; the
         // point is that the structurizer must recognize the graph and decline rather than emit a
         // nesting that does not preserve its entries.
-        let Some(spv) = assemble(irreducible) else {
-            return;
-        };
+        let spv = assemble(irreducible);
         let mut module = crate::spirv_module::load_bytes(&spv).expect("load");
         let function = module.functions.first().expect("one function");
         let graph = build_graph(function).expect("graph");

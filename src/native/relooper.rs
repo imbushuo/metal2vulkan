@@ -2004,65 +2004,16 @@ fn store_phi_edges(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    /// A temp dir unique to this call (pid + a process-wide counter) so parallel tests never share a
-    /// scratch file.
-    fn scratch() -> std::path::PathBuf {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "metal2vulkan_relooper_{}_{}",
-            std::process::id(),
-            n
-        ));
-        let _ = std::fs::create_dir_all(&dir);
-        dir
-    }
-
-    /// Assemble spvasm to a SPIR-V byte module via the local `spirv-as` (Vulkan 1.2). Returns None if
-    /// the tool is unavailable, so the test no-ops in toolchain-less environments.
-    fn assemble(spvasm: &str) -> Option<Vec<u8>> {
-        if std::process::Command::new("spirv-as")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return None;
-        }
-        let dir = scratch();
-        let src = dir.join("in.spvasm");
-        let out = dir.join("in.spv");
-        std::fs::write(&src, spvasm).unwrap();
-        let st = std::process::Command::new("spirv-as")
-            .args(["--target-env", crate::tools::VULKAN_TARGET_ENV])
-            .arg(&src)
-            .arg("-o")
-            .arg(&out)
-            .output()
-            .unwrap();
-        assert!(
-            st.status.success(),
-            "spirv-as: {}",
-            String::from_utf8_lossy(&st.stderr)
-        );
-        Some(std::fs::read(&out).unwrap())
+    fn assemble(spvasm: &str) -> Vec<u8> {
+        crate::tools::spirv_assemble(spvasm).expect("assemble")
     }
 
     fn validates(spv: &[u8]) -> bool {
-        let dir = scratch();
-        let p = dir.join("m.spv");
-        std::fs::write(&p, spv).unwrap();
-        let st = std::process::Command::new("spirv-val")
-            .args(["--target-env", crate::tools::VULKAN_TARGET_ENV])
-            .arg(&p)
-            .output()
-            .unwrap();
-        if !st.status.success() {
-            eprintln!("spirv-val: {}", String::from_utf8_lossy(&st.stderr));
+        let result = crate::tools::spirv_val_bytes(spv, std::path::Path::new(""));
+        if let Err(error) = &result {
+            eprintln!("{error}");
         }
-        st.status.success()
+        result.is_ok()
     }
 
     fn relooper_bytes(spv: &[u8]) -> Vec<u8> {
@@ -2144,7 +2095,7 @@ mod tests {
 
     #[test]
     fn selected_relooper_leaves_unselected_function_cfg_unchanged() {
-        let Some(spv) = assemble(
+        let spv = assemble(
             r#"OpCapability Shader
 OpMemoryModel Logical GLSL450
 OpEntryPoint Fragment %main "main"
@@ -2164,9 +2115,7 @@ OpBranch %m1
 OpReturn
 OpFunctionEnd
 "#,
-        ) else {
-            return;
-        };
+        );
         let mut module = crate::spirv_module::load_bytes(&spv).expect("load");
         let helper_id = module.functions[0]
             .def
@@ -2206,9 +2155,7 @@ OpExecutionMode %main OriginUpperLeft
         }
         spvasm.push_str("OpFunctionEnd\n");
 
-        let Some(spv) = assemble(&spvasm) else {
-            return;
-        };
+        let spv = assemble(&spvasm);
         let mut module = crate::spirv_module::load_bytes(&spv).expect("load");
         assert!(rewrite_to_relooper(&mut module, 8192));
         let switch_case_counts = module.functions[0]
@@ -2377,7 +2324,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(validates(&out), "relooper output must validate");
@@ -2433,7 +2380,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(validates(&out), "relooper output must validate");
@@ -2489,7 +2436,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(validates(&out), "relooper output must validate");
@@ -2523,7 +2470,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(validates(&out), "relooper output must validate");
@@ -2565,7 +2512,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(validates(&out), "relooper output must validate");
@@ -2614,7 +2561,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(
@@ -2656,7 +2603,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(
@@ -2707,7 +2654,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(validates(&out), "scalarized relooper output must validate");
@@ -2777,7 +2724,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(
@@ -2831,7 +2778,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         assert!(validates(&spv), "input must validate");
         let out = relooper_bytes(&spv);
         assert!(
@@ -2898,7 +2845,7 @@ OpExecutionMode %main OriginUpperLeft
                        OpReturn
                        OpFunctionEnd
         "#;
-        let Some(spv) = assemble(spvasm) else { return };
+        let spv = assemble(spvasm);
         let out = relooper_bytes(&spv);
         assert!(
             validates(&out),

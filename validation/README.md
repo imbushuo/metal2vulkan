@@ -131,10 +131,21 @@ them during stage classification. Entry identities likewise retain every parent-
 membership; direct linkage resolves a symbol only when it identifies one exact module across that
 complete provenance set.
 
+Harvest now calls libLLVM inside isolated copies of `corpus-harvest`, not an `llvm-dis` executable.
+The project-owned workers retain hard 20-second/500-MiB limits and parent-owned scratch cleanup.
+`METAL2VULKAN_LLVM_LIBRARY` selects a nonstandard shared library; the former `--llvm-dis` and
+`--llvm-dis-timeout-secs` flags are rejected. Candidate companion shaders likewise use the product's
+linked SPIRV-Tools assembler and validator without external processes. Apple's compiler/linker are
+still needed for optional Metal oracle qualification, not for product translation.
+
 Candidate observations record a build-time SHA-256 fingerprint of the product `Cargo.toml` and
 `src/` tree. `corpus-status` compares that fingerprint instead of retranslating every authored AIR
 row, so status and index refresh do not read source bodies. Any translator-source change makes old
 candidate evidence stale until it is refreshed.
+Both the SPIRV-Tools wrapper and its vendored-source crate are exact-version dependencies in that
+manifest, so changing the linked validator invalidates candidate and translation-audit evidence.
+A/B hashes the translator executable (including its linked validator) and still tracks an installed
+external validator when comparing against legacy translators; new/new A/B does not require one.
 
 Legacy private shards whose identity predates the current sanitizer are migrated explicitly with
 `cargo run -p metal2vulkan-validation --bin corpus-normalize -- --apply`. The command streams AIR

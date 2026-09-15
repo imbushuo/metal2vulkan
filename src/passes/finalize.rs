@@ -2,8 +2,9 @@
 
 use super::*;
 use module_cleanup::{
-    add_needed_capabilities, drop_dead_unreferenced_variables, drop_unused_int64_capability,
-    drop_unused_variable_pointer_capabilities, function_referenced_ids, gc_dead_globals,
+    add_needed_capabilities, drop_dead_unreferenced_variables, drop_unrequired_capabilities,
+    drop_unused_scalar_width_capabilities, drop_unused_variable_pointer_capabilities,
+    function_referenced_ids, gc_dead_globals,
 };
 
 pub(in crate::passes) fn finalize(
@@ -270,7 +271,8 @@ pub(in crate::passes) fn finalize(
 
     drop_dead_unreferenced_variables(ctx, &referenced_from_functions, &interface_ids);
     gc_dead_globals(ctx);
-    drop_unused_int64_capability(ctx);
+    drop_unused_scalar_width_capabilities(&mut ctx.module);
+    drop_unrequired_capabilities(&mut ctx.module);
     let variable_pointer_requirements = drop_unused_variable_pointer_capabilities(ctx);
     add_needed_capabilities(ctx, variable_pointer_requirements);
     order_module_scope_dependencies(&mut ctx.module)?;

@@ -353,6 +353,11 @@ pub(super) fn raw_buffer_block_type() -> LlType {
     LlType::Struct(vec![LlType::Array(Box::new(LlType::Int(32)), 0)])
 }
 
+/// The word array a `[[threadgroup]]` parameter gets when its accesses reinterpret between element
+/// types, so no AIR layout describes it. AIR carries no length -- Metal binds one at encode time --
+/// so 2048 words is a guess, and `passes::stage_input` replaces it with `length / 4` words when the
+/// caller named a byte length for that Metal index. Keep the element `Int(32)`: the body's access
+/// chains are typed against it and only the bound is the caller's to move.
 pub(super) fn raw_workgroup_array_type() -> LlType {
     LlType::Array(Box::new(LlType::Int(32)), 2048)
 }

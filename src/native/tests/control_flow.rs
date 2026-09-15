@@ -1,7 +1,9 @@
 #![allow(unused_imports)]
 use super::super::cfg::{
-    id_ref_operand, infer_branch_merges, infer_loop_merges, infer_switch_merges,
-    lower_unstructured_switches, split_body_blocks, BodyBlock,
+    exceeds_local_structured_plan_budget, id_ref_operand, infer_branch_merges,
+    infer_direct_switch_merges, infer_loop_merges, infer_switch_merges,
+    infer_switch_merges_bounded, loop_forest_is_empty, lower_unstructured_switches,
+    split_body_blocks, BodyBlock, CROSS_ARM_EDGE_MAX_BLOCKS,
 };
 use super::super::emit_vulkan_spirv;
 use super::super::emitter::Emitter;
@@ -263,11 +265,11 @@ b:
         failure.error
     );
     assert_eq!(
-        failure.ordinary_plan_rejected_functions,
+        failure.rejected.ordinary_plan_functions,
         HashSet::from(["k".to_string()])
     );
     assert_eq!(
-        failure.ownership_plan_rejected_functions,
+        failure.rejected.ownership_plan_functions,
         HashSet::from(["k".to_string()])
     );
 }
@@ -310,13 +312,7 @@ attributes #0 = { nounwind }
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpLoad"), "{asm}");
     assert!(asm.contains("OpStore"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -357,13 +353,7 @@ exit:
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpPhi"), "{asm}");
     assert!(asm.contains("OpIEqual"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -406,13 +396,7 @@ declare float @air.fast_fmedian3.f32(float, float, float)
     assert_eq!(fmax_count, 4, "{asm}");
     assert_eq!(fmin_count, 4, "{asm}");
     assert!(!asm.contains("OpFunctionCall"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -451,13 +435,7 @@ exit:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpPhi"), "{asm}");
     assert!(asm.contains("OpIAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -518,13 +496,7 @@ exit:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -587,13 +559,7 @@ exit:
     // structuring — so there are 5 selection merges. spirv-val accepts the result and semantics are
     // unchanged because OpSelectionMerge is a structural declaration, not a computation.
     assert_eq!(asm.matches("OpSelectionMerge").count(), 5, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -634,13 +600,7 @@ cont:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -685,13 +645,7 @@ exit:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -740,13 +694,7 @@ exit:
     assert!(asm.contains("OpLoopMerge"), "{asm}");
     assert!(!asm.contains("OpSwitch"), "{asm}");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -788,13 +736,7 @@ body:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpPhi"), "{asm}");
     assert!(asm.contains("OpFAdd"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -856,13 +798,7 @@ entry:
         }
     });
     assert_eq!(face_dims_offset, Some(40), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -905,13 +841,7 @@ entry:
         }),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -994,13 +924,7 @@ exit:
                     .is_some_and(|ptr| storage_ptrs.contains(&ptr))),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1070,13 +994,7 @@ declare void @llvm.memcpy.p0.p1.i64(ptr, ptr addrspace(1), i64, i1)
         asm.matches("OpStore").count() >= 7,
         "expected the nested copy to lower to per-leaf stores: {asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1158,13 +1076,7 @@ exit:
         })
         .count();
     assert!(v2u32_constructs >= 1, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1210,13 +1122,7 @@ declare i32 @air.atomic.global.cmpxchg.weak.i32(ptr addrspace(1), ptr, i32, i32,
         "{asm}"
     );
     assert_no_pointer_bitcasts(&spv);
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1311,13 +1217,7 @@ exit:
             );
         }
     }
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1367,13 +1267,7 @@ exit:
             .any(|line| line.contains("OpPtrAccessChain %_ptr_Workgroup_uint")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1457,13 +1351,7 @@ m:
             .any(|line| line.contains(" OpBitcast ") && line.contains("_ptr_")),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// A finalized switch can have one actual predecessor even though LLVM repeats that predecessor in
@@ -1527,13 +1415,7 @@ merge:
             .all(|inst| inst.class.opcode != Op::Load || inst.result_type != Some(uchar)))),
         "{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
@@ -1610,13 +1492,7 @@ declare i32 @air.atomic.global.load.i32(ptr addrspace(1), i32, i32, i1)
         !asm.contains("OpVariable %_ptr_Workgroup_uint Workgroup"),
         "atomic must retain the raw StorageBuffer cursor:\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -1715,13 +1591,7 @@ merge:
         std::process::id()
     ));
     let _ = std::fs::create_dir_all(&tmp);
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
     let _ = std::fs::remove_dir_all(tmp);
 }
 
@@ -2149,13 +2019,7 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
     let asm = disassemble(&spv).expect("disassemble");
     let module = load_bytes(&spv).expect("load native spv");
     assert_phi_operand_types_match(&module, &asm);
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2306,13 +2170,7 @@ exit:
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpCompositeConstruct"), "{asm}");
     assert!(!asm.contains("_ptr_Workgroup_v4float"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2368,13 +2226,7 @@ exit:
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpCompositeConstruct"), "{asm}");
     assert!(!asm.contains("_ptr_Workgroup_v4float"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2547,13 +2399,7 @@ merge:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpUnreachable"), "{asm}");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 // Carrier gate for the switch-bypass phi rewrite (T8): the same shape as
@@ -2766,13 +2612,7 @@ outer_merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSwitch"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2821,13 +2661,7 @@ merge:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(!asm.contains("OpSwitch"), "{asm}");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
     std::fs::remove_dir_all(&tmp).expect("remove validation scratch");
 }
 
@@ -2872,13 +2706,7 @@ merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert_eq!(asm.matches("OpSwitch").count(), 2, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -2961,13 +2789,7 @@ merge:
         .collect::<Vec<_>>();
     assert_eq!(merges.len(), 2, "{asm}");
     assert_ne!(merges[0], merges[1], "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3016,13 +2838,7 @@ inner:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
     assert!(asm.contains("OpPhi"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3064,13 +2880,7 @@ exit:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert_eq!(asm.matches("OpLoopMerge").count(), 1, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3125,13 +2935,7 @@ exit:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3182,13 +2986,7 @@ exit:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
     assert!(asm.contains("OpPhi"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3229,13 +3027,7 @@ join:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpPhi"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
     std::fs::remove_dir_all(&tmp).expect("remove validation scratch");
 }
 
@@ -3282,13 +3074,7 @@ exit:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3357,13 +3143,7 @@ exit:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3433,13 +3213,7 @@ exit:
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3603,13 +3377,7 @@ merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3661,13 +3429,7 @@ merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3709,13 +3471,7 @@ merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3747,13 +3503,7 @@ merge:
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert_eq!(asm.matches("OpFAdd").count(), 3, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -3801,13 +3551,7 @@ merge:
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpPhi"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4032,13 +3776,7 @@ merge:
     let out = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&out).expect("disassemble");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4079,13 +3817,7 @@ merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert_eq!(asm.matches("OpSelectionMerge").count(), 2, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4126,13 +3858,7 @@ exit:
     let asm = disassemble(&out).expect("disassemble transformed");
     let selection_merges = asm.matches("OpSelectionMerge").count();
     assert!(selection_merges >= 1, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4183,13 +3909,7 @@ merge:
     let spv = crate::translate_sanitized_native(ll, Stage::Kernel, &tmp).expect("translate");
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4231,13 +3951,7 @@ merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4273,13 +3987,7 @@ exit:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4323,13 +4031,7 @@ merge:
         .collect::<Vec<_>>();
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4387,13 +4089,7 @@ merge:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert_eq!(asm.matches("OpBranchConditional").count(), 4, "{asm}");
     assert_eq!(asm.matches("OpSelectionMerge").count(), 4, "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4436,13 +4132,7 @@ merge:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4485,13 +4175,7 @@ cont:
     let asm = disassemble(&out).expect("disassemble transformed");
     assert!(asm.contains("OpSelectionMerge"), "{asm}");
     assert!(asm.contains("OpLoopMerge"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4693,13 +4377,7 @@ no:
     let asm = disassemble(&spv).expect("disassemble");
     assert!(asm.contains("OpFOrdLessThan"), "{asm}");
     assert!(asm.contains("OpSelect"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -4924,13 +4602,7 @@ entry:
     assert!(asm.contains("ArrayStride 28"), "{asm}");
     assert!(asm.contains("OpTypeArray"), "{asm}");
     assert!(asm.contains("OpInBoundsAccessChain"), "{asm}");
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// SkyLight `sum_rgba_{columns,rows}` residual: LLVM emits `trunc i16 %x to i2` + `switch i2`
@@ -5000,13 +4672,7 @@ def:
             && l.contains(" 1 ")),
         "switch cases must be low-bit encodings 3/2/1, not sign-extended -1/-2:\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&spv, &tmp).expect("spirv-val");
 }
 
 /// Companion to the i2 switch: other sub-32 nonstandard widths used to emit `OpConstant %iN`
@@ -5046,13 +4712,7 @@ entry:
         !asm.contains("OpUConvert"),
         "i24 and i32 share one emitted storage type, so conversion must be valid at construction:\n{asm}"
     );
-    if std::process::Command::new("spirv-val")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
-    }
+    tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
 }
 
 #[test]
@@ -5087,4 +4747,183 @@ entry:
         "i24 and i32 share one emitted storage type:\n{asm}"
     );
     tools::spirv_val_bytes(&out, &tmp).expect("spirv-val");
+}
+
+/// A CFG the local structured planner declines for *branching density* still gets the complete
+/// switch-merge inference. `exceeds_local_structured_plan_budget` bounds repeated per-header
+/// ownership planning, which is not what `infer_switch_merges` costs — that cost is the candidate
+/// scan, and it is bounded by block count. Downgrading to the direct-edge subset here leaves the
+/// switch without a merge and sends the whole module to raw-buffer construction, so the bound has to
+/// be the block count both fallbacks already agree on.
+#[test]
+fn dense_small_cfg_keeps_complete_switch_merge_inference() {
+    let mut ll = String::from(
+        "define void @dense(i1 %c, i32 %sel) {\n\
+         entry:\n\
+         \x20 switch i32 %sel, label %d [\n\
+         \x20   i32 0, label %a\n\
+         \x20   i32 1, label %b\n\
+         \x20 ]\n\
+         a:\n\
+         \x20 br label %a2\n\
+         a2:\n\
+         \x20 br label %merge\n\
+         b:\n\
+         \x20 br label %b2\n\
+         b2:\n\
+         \x20 br label %merge\n\
+         d:\n\
+         \x20 br label %merge\n\
+         merge:\n\
+         \x20 br label %n0\n",
+    );
+    // 45 diamonds: 99 blocks (under the 128-block ceiling) with 45 branching headers, so the
+    // block-count term admits the graph and only the density term rejects it.
+    const DIAMONDS: usize = 45;
+    for i in 0..DIAMONDS {
+        ll.push_str(&format!(
+            "n{i}:\n  br i1 %c, label %t{i}, label %n{next}\nt{i}:\n  br label %n{next}\n",
+            next = i + 1
+        ));
+    }
+    ll.push_str(&format!("n{DIAMONDS}:\n  ret void\n}}\n"));
+
+    let blocks = super::super::ir::LlModule::parse(&ll)
+        .expect("parse")
+        .functions
+        .into_iter()
+        .find(|function| function.name == "dense")
+        .expect("dense function")
+        .blocks;
+
+    assert!(
+        exceeds_local_structured_plan_budget(&blocks),
+        "the density term must be what declines this graph: {} blocks",
+        blocks.len()
+    );
+    assert!(blocks.len() <= CROSS_ARM_EDGE_MAX_BLOCKS);
+    assert_eq!(
+        infer_direct_switch_merges(&blocks).get("%entry"),
+        None,
+        "arms reconverge through an intermediate block, so the direct subset proves nothing",
+    );
+    assert_eq!(
+        infer_switch_merges_bounded(&blocks).get("%entry"),
+        Some(&"%merge".to_string()),
+    );
+}
+
+/// Above `CROSS_ARM_EDGE_MAX_BLOCKS` the bounded inference is still the linear direct subset: that
+/// is the bound the complete candidate scan actually costs against.
+#[test]
+fn oversized_cfg_keeps_the_direct_switch_merge_subset() {
+    let mut ll = String::from(
+        "define void @wide(i32 %sel) {\n\
+         entry:\n\
+         \x20 switch i32 %sel, label %d [\n\
+         \x20   i32 0, label %a\n\
+         \x20   i32 1, label %b\n\
+         \x20 ]\n\
+         a:\n\
+         \x20 br label %a2\n\
+         a2:\n\
+         \x20 br label %merge\n\
+         b:\n\
+         \x20 br label %b2\n\
+         b2:\n\
+         \x20 br label %merge\n\
+         d:\n\
+         \x20 br label %merge\n\
+         merge:\n\
+         \x20 br label %p0\n",
+    );
+    let pad = CROSS_ARM_EDGE_MAX_BLOCKS + 1;
+    for i in 0..pad {
+        ll.push_str(&format!("p{i}:\n  br label %p{next}\n", next = i + 1));
+    }
+    ll.push_str(&format!("p{pad}:\n  ret void\n}}\n"));
+
+    let blocks = super::super::ir::LlModule::parse(&ll)
+        .expect("parse")
+        .functions
+        .into_iter()
+        .find(|function| function.name == "wide")
+        .expect("wide function")
+        .blocks;
+
+    assert!(blocks.len() > CROSS_ARM_EDGE_MAX_BLOCKS);
+    assert_eq!(
+        infer_switch_merges_bounded(&blocks),
+        infer_direct_switch_merges(&blocks),
+    );
+    assert_eq!(infer_switch_merges_bounded(&blocks).get("%entry"), None);
+}
+
+/// Build a CFG that only the *density* term of `exceeds_local_structured_plan_budget` declines: one
+/// conditional whose arms reconverge two hops apart, then `DIAMONDS` two-way diamonds. `back_edge`
+/// closes the chain into a natural loop without changing the block count.
+#[cfg(test)]
+fn dense_diamond_chain(back_edge: bool) -> Vec<BodyBlock> {
+    const DIAMONDS: usize = 45;
+    let mut ll = String::from(
+        "define void @dense(i1 %c) {\n\
+         entry:\n\
+         \x20 br i1 %c, label %a, label %b\n\
+         a:\n\
+         \x20 br label %a2\n\
+         a2:\n\
+         \x20 br label %join\n\
+         b:\n\
+         \x20 br label %b2\n\
+         b2:\n\
+         \x20 br label %join\n\
+         join:\n\
+         \x20 br label %n0\n",
+    );
+    for i in 0..DIAMONDS {
+        ll.push_str(&format!(
+            "n{i}:\n  br i1 %c, label %t{i}, label %n{next}\nt{i}:\n  br label %n{next}\n",
+            next = i + 1
+        ));
+    }
+    ll.push_str(&if back_edge {
+        format!("n{DIAMONDS}:\n  br i1 %c, label %n0, label %exit\nexit:\n  ret void\n}}\n")
+    } else {
+        format!("n{DIAMONDS}:\n  ret void\n}}\n")
+    });
+    super::super::ir::LlModule::parse(&ll)
+        .expect("parse")
+        .functions
+        .into_iter()
+        .find(|function| function.name == "dense")
+        .expect("dense function")
+        .blocks
+}
+
+/// A loop-free CFG the local planner declined for branching density still gets the complete
+/// branch-merge inference. Like the switch case above, `infer_branch_merges` costs the candidate
+/// scan, not the per-header ownership planning the budget was bounding.
+#[test]
+fn loop_free_dense_cfg_keeps_complete_branch_merge_inference() {
+    let blocks = dense_diamond_chain(false);
+    assert!(exceeds_local_structured_plan_budget(&blocks));
+    assert!(blocks.len() <= CROSS_ARM_EDGE_MAX_BLOCKS);
+    assert!(loop_forest_is_empty(&blocks));
+    assert_eq!(
+        infer_branch_merges(&blocks).get(&("%a".to_string(), "%b".to_string())),
+        Some(&"%join".to_string()),
+        "arms reconverge two hops apart, so only the complete inference proves the merge",
+    );
+}
+
+/// The same CFG with one back edge keeps the bounded header subset. The skip path clears
+/// `loop_merges` because the block order was never structurized, so handing the emitter selection
+/// merges for a CFG that also has loop constructs describes only half the construct tree -- measured
+/// as two modules that stopped translating at all until this gate was added.
+#[test]
+fn a_loop_in_a_dense_cfg_declines_the_complete_branch_merge_inference() {
+    let blocks = dense_diamond_chain(true);
+    assert!(exceeds_local_structured_plan_budget(&blocks));
+    assert!(blocks.len() <= CROSS_ARM_EDGE_MAX_BLOCKS);
+    assert!(!loop_forest_is_empty(&blocks));
 }
