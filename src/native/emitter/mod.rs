@@ -39,6 +39,8 @@ mod staged;
 mod types;
 
 #[cfg(test)]
+mod cursor_discovery_tests;
+#[cfg(test)]
 mod layout_tests;
 
 use helpers::*;
@@ -196,7 +198,7 @@ pub(super) struct Emitter {
     raw_call_param_offsets: HashMap<(String, String), RawBufferOffset>,
     /// `(callee, caller-local argument name)` for every helper call refused because its
     /// descriptor-relative byte cursor cannot cross the call. See `EmissionFailure`.
-    cursor_call_sites: HashSet<(String, String)>,
+    cursor_calls: CursorCallDiscovery,
     /// Cached `(callee, parameter index)` pairs whose call sites cannot disagree about the byte
     /// a `constant`-space cursor names. See `Emitter::constant_call_cursor_cannot_conflict`.
     agreeing_constant_call_cursors: Option<HashSet<(String, usize)>>,
@@ -484,6 +486,46 @@ struct RawBufferOffset {
     device_addr_base: Option<Word>,
 }
 
+#[derive(Default)]
+enum CursorCallDiscovery {
+    #[default]
+    Complete,
+    Rejected {
+        reason: String,
+        sites: HashSet<(String, String)>,
+    },
+}
+
+impl CursorCallDiscovery {
+    fn reject(&mut self, callee: String, argument: String, reason: String) {
+        match self {
+            Self::Complete => {
+                *self = Self::Rejected {
+                    reason,
+                    sites: HashSet::from([(callee, argument)]),
+                };
+            }
+            Self::Rejected { sites, .. } => {
+                sites.insert((callee, argument));
+            }
+        }
+    }
+
+    fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Complete => None,
+            Self::Rejected { reason, .. } => Some(reason),
+        }
+    }
+
+    fn sites(&self) -> HashSet<(String, String)> {
+        match self {
+            Self::Complete => HashSet::new(),
+            Self::Rejected { sites, .. } => sites.clone(),
+        }
+    }
+}
+
 impl RawBufferOffset {
     fn root(root: String, addrspace: u32) -> Self {
         Self {
@@ -632,7 +674,7 @@ impl Emitter {
             inline_parameter_substitutions: Vec::new(),
             raw_buffer_params: HashSet::new(),
             raw_call_param_offsets: HashMap::new(),
-            cursor_call_sites: HashSet::new(),
+            cursor_calls: CursorCallDiscovery::default(),
             agreeing_constant_call_cursors: None,
             data_buffer_params: HashSet::new(),
             raw_offsets: HashMap::new(),
@@ -1109,7 +1151,11 @@ impl Emitter {
     /// these, so raising a failure anywhere in emission must not drop them.
     fn emission_failure(&self, error: String) -> crate::emit_sidecar::EmissionFailure {
         crate::emit_sidecar::EmissionFailure {
-            error,
+            error: self
+                .cursor_calls
+                .reason()
+                .map(str::to_owned)
+                .unwrap_or(error),
             rejected: Box::new(self.emission_rejections()),
         }
     }
@@ -1118,7 +1164,7 @@ impl Emitter {
         crate::emit_sidecar::EmissionRejections {
             ordinary_plan_functions: self.emit_sidecar.ordinary_plan_rejected_functions.clone(),
             ownership_plan_functions: self.emit_sidecar.ownership_plan_rejected_functions.clone(),
-            cursor_call_sites: self.cursor_call_sites.clone(),
+            cursor_call_sites: self.cursor_calls.sites(),
         }
     }
 
@@ -2840,6 +2886,9 @@ impl Emitter {
         // representations; each source body can be released immediately after its own emission.
         for f in functions {
             attempt!(self.emit_function(&f));
+            if let Some(reason) = self.cursor_calls.reason() {
+                return Err(self.emission_failure(reason.to_string()));
+            }
         }
         // The old residual inliner removed migrated helper bodies and dead types after emission,
         // but left capabilities requested while materializing those types. Replay only declarations

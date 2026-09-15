@@ -101,6 +101,23 @@ phis are included in the final rewrite. Switch reconvergence uses the existing i
 reachability for real-block membership rather than allocating string sets per arm. The graph
 is rebuilt after topology changes, and path proofs and merge selection remain unchanged.
 
+Descriptor-relative cursors that cannot cross a helper boundary are discovered together within
+the rejected function. Its provisional emission is explicitly unpublishable; it returns the
+collected call-site refusals before a module can leave the emitter. The source inliner applies
+those exact callee/argument selections in one parse/rewrite/sweep, then retries. It does not
+select unrelated calls or accept the provisional instructions.
+
+Across required retries, a translation-local cache retains unchanged function headers, bodies,
+and their typed carriers. Exact source and the complete named-type environment govern reuse.
+Changed functions are reparsed; module-wide pointer/call/metadata inference is always recomputed.
+Only one version per function is retained, with limits on function count and retained source size.
+
+Consumers persisting validated AIR translations can use `tools::translation_cache_identity` and,
+with `serde`, `TransformOptions::cache_identity`. The former combines the product source/build
+fingerprint with a digest of the actual loaded LLVM image; unknown image identity refuses caching
+without changing translation. The latter encodes every option, preserving floating-point bits.
+Cache keys must also contain the exact input bytes and stage; a hash alone is not identity.
+
 ## Validity by construction
 
 `finish_module` is the common owned-module boundary for primary and alternate emission. It performs

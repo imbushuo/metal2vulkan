@@ -2,6 +2,80 @@
 
 use super::*;
 
+#[derive(Default)]
+pub(in crate::native) struct FunctionParseCache {
+    types: HashMap<String, LlType>,
+    functions: HashMap<String, ParsedFunction>,
+    source_bytes: usize,
+    #[cfg(test)]
+    hits: usize,
+}
+
+struct ParsedFunction {
+    header: String,
+    body: Vec<String>,
+    function: LlFunction,
+    source_bytes: usize,
+}
+
+impl FunctionParseCache {
+    fn set_types(&mut self, types: &HashMap<String, LlType>) {
+        if self.types != *types {
+            self.functions.clear();
+            self.source_bytes = 0;
+            self.types = types.clone();
+        }
+    }
+
+    fn lower(
+        &mut self,
+        header: &str,
+        body: &[&str],
+        mut function: LlFunction,
+        types: &HashMap<String, LlType>,
+    ) -> Result<LlFunction, String> {
+        if let Some(cached) = self.functions.get(&function.name) {
+            if cached.header == header
+                && cached.body.len() == body.len()
+                && cached.body.iter().zip(body).all(|(a, b)| a == b)
+            {
+                #[cfg(test)]
+                {
+                    self.hits += 1;
+                }
+                return Ok(cached.function.clone());
+            }
+        }
+        let entry = crate::native::cfg::implicit_entry_block_name(&function);
+        function.blocks = crate::native::cfg::split_source_body_blocks(body, entry, types)?;
+        if let Some(previous) = self.functions.remove(&function.name) {
+            self.source_bytes -= previous.source_bytes;
+        }
+        // One translation owns this cache; retain at most one version of a
+        // function and cap the source represented by shared typed carriers.
+        let source_bytes = header.len().saturating_add(
+            body.iter()
+                .fold(0usize, |sum, line| sum.saturating_add(line.len())),
+        );
+        if self.functions.len() >= 256
+            || self.source_bytes.saturating_add(source_bytes) > 4 * 1024 * 1024
+        {
+            return Ok(function);
+        }
+        self.source_bytes += source_bytes;
+        self.functions.insert(
+            function.name.clone(),
+            ParsedFunction {
+                header: header.to_owned(),
+                body: body.iter().map(|line| (*line).to_owned()).collect(),
+                function: function.clone(),
+                source_bytes,
+            },
+        );
+        Ok(function)
+    }
+}
+
 impl LlModule {
     pub(in crate::native) fn parse(ll: &str) -> Result<Self, String> {
         let kern = meta::parse_air_kernel_meta(ll);
@@ -30,19 +104,21 @@ impl LlModule {
         Self::parse_inner(ll, true, kern.as_ref(), entry_name.as_deref())
     }
 
-    pub(in crate::native) fn parse_with_primitive_phi_metadata_and_stage_meta(
-        ll: &str,
-        kern: Option<&meta::KernMeta>,
-        entry_name: Option<&str>,
-    ) -> Result<Self, String> {
-        Self::parse_inner(ll, true, kern, entry_name)
-    }
-
     pub(in crate::native) fn parse_inner(
         ll: &str,
         primitive_phi_metadata: bool,
         kern: Option<&meta::KernMeta>,
         entry_name: Option<&str>,
+    ) -> Result<Self, String> {
+        Self::parse_cached(ll, primitive_phi_metadata, kern, entry_name, None)
+    }
+
+    pub(in crate::native) fn parse_cached(
+        ll: &str,
+        primitive_phi_metadata: bool,
+        kern: Option<&meta::KernMeta>,
+        entry_name: Option<&str>,
+        mut cache: Option<&mut FunctionParseCache>,
     ) -> Result<Self, String> {
         let ray_lowered = crate::native::ray_intersection::lower_callback_free_triangle_queries(ll);
         let ll = ray_lowered.as_deref().unwrap_or(ll);
@@ -67,6 +143,9 @@ impl LlModule {
                 }
                 types.insert(name.trim().to_string(), parse_type(body.trim())?);
             }
+        }
+        if let Some(cache) = cache.as_deref_mut() {
+            cache.set_types(&types);
         }
         let mut functions = Vec::new();
         let mut declarations = Vec::new();
@@ -94,8 +173,13 @@ impl LlModule {
                         func.name
                     ));
                 }
-                let entry = crate::native::cfg::implicit_entry_block_name(&func);
-                func.blocks = crate::native::cfg::split_source_body_blocks(&body, entry, &types)?;
+                if let Some(cache) = cache.as_deref_mut() {
+                    func = cache.lower(line, &body, func, &types)?;
+                } else {
+                    let entry = crate::native::cfg::implicit_entry_block_name(&func);
+                    func.blocks =
+                        crate::native::cfg::split_source_body_blocks(&body, entry, &types)?;
+                }
                 functions.push(func);
                 continue;
             }
@@ -116,6 +200,20 @@ impl LlModule {
         }
         if functions.is_empty() {
             return Err("native emitter: no function definitions found".into());
+        }
+        if let Some(cache) = cache {
+            let live = functions
+                .iter()
+                .map(|function| function.name.as_str())
+                .collect::<HashSet<_>>();
+            cache.functions.retain(|name, function| {
+                if live.contains(name.as_str()) {
+                    true
+                } else {
+                    cache.source_bytes -= function.source_bytes;
+                    false
+                }
+            });
         }
         // Every body reader below consumes the typed carriers. Each borrowed function-body index was
         // released immediately after that function was lowered.
@@ -251,6 +349,37 @@ impl LlModule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_reuses_only_unchanged_function_carriers_and_type_environment() {
+        let original = "%T = type { i32 }\n\
+            define i32 @helper(i32 %x) {\n %y = add i32 %x, 1\n ret i32 %y\n}\n\
+            define i32 @main(i32 %x) {\n %y = call i32 @helper(i32 %x)\n ret i32 %y\n}\n";
+        let mut cache = FunctionParseCache::default();
+        let first = LlModule::parse_cached(original, false, None, Some("main"), Some(&mut cache))
+            .expect("initial parse");
+        let changed = original.replace("call i32 @helper(i32 %x)", "add i32 %x, 1");
+        let next = LlModule::parse_cached(&changed, false, None, Some("main"), Some(&mut cache))
+            .expect("rewritten parse");
+        assert_eq!(cache.hits, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            first.functions[0].blocks[0].typed.as_ref().unwrap(),
+            next.functions[0].blocks[0].typed.as_ref().unwrap(),
+        ));
+        assert!(!std::sync::Arc::ptr_eq(
+            first.functions[1].blocks[0].typed.as_ref().unwrap(),
+            next.functions[1].blocks[0].typed.as_ref().unwrap(),
+        ));
+        let changed_types = changed.replace("%T = type { i32 }", "%T = type { i64 }");
+        let third =
+            LlModule::parse_cached(&changed_types, false, None, Some("main"), Some(&mut cache))
+                .expect("changed type parse");
+        assert_eq!(cache.hits, 1, "named type changes invalidate every carrier");
+        assert!(!std::sync::Arc::ptr_eq(
+            next.functions[0].blocks[0].typed.as_ref().unwrap(),
+            third.functions[0].blocks[0].typed.as_ref().unwrap(),
+        ));
+    }
 
     #[test]
     fn threaded_stage_meta_preserves_kernel_inference() {

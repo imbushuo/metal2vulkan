@@ -17,6 +17,41 @@ macro_rules! llvm_api {
         }
 
         impl Llvm {
+            #[cfg(unix)]
+            fn cache_fingerprint(&self) -> Result<String, String> {
+                use sha2::{Digest, Sha256};
+                use std::io::Read;
+                let mut info = std::mem::MaybeUninit::<libc::Dl_info>::uninit();
+                let found = unsafe {
+                    libc::dladdr(self.context_create as *const c_void, info.as_mut_ptr())
+                };
+                if found == 0 {
+                    return Err("cannot identify the loaded LLVM image".into());
+                }
+                let info = unsafe { info.assume_init() };
+                if info.dli_fname.is_null() {
+                    return Err("loaded LLVM image has no path".into());
+                }
+                let path = unsafe { CStr::from_ptr(info.dli_fname) };
+                use std::os::unix::ffi::OsStrExt;
+                let mut file = std::fs::File::open(OsStr::from_bytes(path.to_bytes()))
+                    .map_err(|error| format!("open loaded LLVM image: {error}"))?;
+                let mut hash = Sha256::new();
+                let mut buffer = [0u8; 65536];
+                loop {
+                    let count = file.read(&mut buffer)
+                        .map_err(|error| format!("hash loaded LLVM image: {error}"))?;
+                    if count == 0 { break; }
+                    hash.update(&buffer[..count]);
+                }
+                Ok(format!("{:x}", hash.finalize()))
+            }
+
+            #[cfg(not(unix))]
+            fn cache_fingerprint(&self) -> Result<String, String> {
+                Err("loaded LLVM image identity is unavailable on this platform".into())
+            }
+
             fn open(path: &OsStr) -> Result<Self, String> {
                 // Only documented LLVM C ABI symbols are loaded, from the caller-selected library.
                 unsafe {
@@ -31,6 +66,14 @@ macro_rules! llvm_api {
             }
         }
     };
+}
+
+pub(super) fn cache_fingerprint() -> Result<&'static str, String> {
+    static IDENTITY: OnceLock<Result<String, String>> = OnceLock::new();
+    IDENTITY
+        .get_or_init(|| llvm()?.cache_fingerprint())
+        .as_deref()
+        .map_err(Clone::clone)
 }
 
 llvm_api! {

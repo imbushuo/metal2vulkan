@@ -84,6 +84,15 @@ pub fn llvm_disassemble(bitcode: &[u8]) -> Result<String, String> {
     llvm::disassemble(bitcode)
 }
 
+/// Product source/native-tool declarations and the actual loaded LLVM image.
+/// A caller unable to obtain this identity must not reuse persisted AIR results.
+pub fn translation_cache_identity() -> Result<(&'static str, &'static str), String> {
+    Ok((
+        env!("METAL2VULKAN_BUILD_FINGERPRINT"),
+        llvm::cache_fingerprint()?,
+    ))
+}
+
 /// Assemble and verify textual LLVM IR in memory, returning bitcode (the `llvm-as` operation).
 /// This is not needed for translating textual AIR through the native emitter.
 pub fn llvm_assemble(text: &str) -> Result<Vec<u8>, String> {

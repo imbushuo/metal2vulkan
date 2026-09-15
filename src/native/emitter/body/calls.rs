@@ -598,16 +598,19 @@ impl Emitter {
                         .is_some_and(|raw| !raw.unmodelable)
                     && self.ir.param_is_dereferenced(&call.callee, &param_name)
                 {
-                    // Record the site before refusing: with no boundary there is no cursor to
-                    // carry, and the AIR-text retry inlines exactly this call to remove it.
-                    self.cursor_call_sites
-                        .insert((call.callee.clone(), arg_name.clone()));
-                    return Err(format!(
-                        "native emitter: helper @{} parameter {param_name} is passed a \
+                    // This construction is now unpublishable. Finish discovering the
+                    // function's other cursor sites, then reject before any module leaves
+                    // the emitter. The retry removes all discovered boundaries together.
+                    self.cursor_calls.reject(
+                        call.callee.clone(),
+                        arg_name.clone(),
+                        format!(
+                            "native emitter: helper @{} parameter {param_name} is passed a \
                          descriptor-backed pointer whose byte cursor cannot cross the call; the \
                          callee would read and write scratch where Metal reaches the buffer",
-                        call.callee
-                    ));
+                            call.callee
+                        ),
+                    );
                 }
             }
             ids.push(self.value_id_in(&arg.value, &arg.ty, instructions)?);

@@ -37,6 +37,9 @@ pub enum Stage {
     Kernel,
 }
 
+#[cfg(feature = "serde")]
+mod options_identity;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TransformOptions {
     /// Complete descriptor-set and binding layout for this independently translated stage.

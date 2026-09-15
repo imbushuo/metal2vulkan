@@ -113,13 +113,13 @@ fn emit_vulkan_spirv_inner(
     // that keeps the callee's accesses on the buffer is the one with no call boundary: splice the
     // refused helper calls into their callers in the AIR text and emit that source instead.
     //
-    // Emission raises the first refusal it reaches and stops, so one pass names one call site.
-    // Splicing it and re-emitting names the next, and each pass removes at least one call from an
-    // acyclic internal call graph, so the loop converges; only a module that already failed enters
-    // it, and the bound keeps the failure path from re-emitting without end.
+    // A rejected function discovers its cursor sites together without publishing
+    // provisional IR. Each retry removes those boundaries; unchanged functions
+    // reuse their original typed carriers while module-wide provenance is re-derived.
     let mut source = san_ll;
     let mut spliced_calls = 0usize;
     let mut first_failure = None;
+    let mut parse_cache = ir::FunctionParseCache::default();
     for _ in 0..MAX_CURSOR_CALL_SPLICES {
         let failure = match emit_lowered_air_text(
             &source,
@@ -131,6 +131,7 @@ fn emit_vulkan_spirv_inner(
             // pointer-consumer inliner does; select the bounded whole-CFG constructor from that
             // fact.
             pointer_consumers.requires_relooper || spliced_calls > 0,
+            &mut parse_cache,
         ) {
             Ok(emitted) => return Ok(emitted),
             Err(failure) => failure,
@@ -181,14 +182,17 @@ fn emit_lowered_air_text(
     entry_name: Option<&str>,
     buffer_layouts: Option<&HashMap<u32, meta::AirType>>,
     requires_relooper: bool,
+    parse_cache: &mut ir::FunctionParseCache,
 ) -> Result<crate::emit_sidecar::EmittedSpirv, crate::emit_sidecar::EmissionFailure> {
     let retry_debug = crate::env_vars::retry_debug();
     let san_ll = san_ll.to_string();
-    let mut parsed = if primitive_phi_metadata {
-        LlModule::parse_with_primitive_phi_metadata_and_stage_meta(&san_ll, kern, entry_name)
-    } else {
-        LlModule::parse_with_stage_meta(&san_ll, kern, entry_name)
-    }
+    let mut parsed = LlModule::parse_cached(
+        &san_ll,
+        primitive_phi_metadata,
+        kern,
+        entry_name,
+        Some(parse_cache),
+    )
     .map_err(crate::emit_sidecar::EmissionFailure::from_error)?;
     let requires_device_addresses = requires_device_address_model(&parsed);
     if retry_debug {

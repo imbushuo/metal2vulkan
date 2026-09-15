@@ -182,21 +182,16 @@ pub(super) fn inline_cursor_call_sites(
     san_ll: &str,
     sites: &HashSet<(String, String)>,
 ) -> Option<String> {
-    let mut ordered = sites.iter().collect::<Vec<_>>();
-    ordered.sort();
-    let mut source = san_ll.to_string();
-    let mut changed = false;
-    for (callee, argument) in ordered {
-        // The typed IR names a callee bare; every name in the AIR text keeps its `@` sigil.
-        let targets = HashSet::from([format!("@{}", callee.trim_start_matches('@'))]);
-        // No caller filter: the cursor may be built in a helper rather than the entry, and an
-        // argument name that also occurs in an unrelated caller only inlines one more call.
-        if let Some(inlined) = try_inline(&source, Some((&targets, argument.as_str(), None))) {
-            changed |= inlined != source;
-            source = inlined;
-        }
-    }
-    changed.then_some(source)
+    let sites = sites
+        .iter()
+        .map(|(callee, argument)| {
+            (
+                format!("@{}", callee.trim_start_matches('@')),
+                argument.clone(),
+            )
+        })
+        .collect();
+    try_inline_with_sites(san_ll, None, Some(&sites)).filter(|rewritten| rewritten != san_ll)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -797,6 +792,14 @@ fn try_inline(
     san_ll: &str,
     targets: Option<(&HashSet<String>, &str, Option<&str>)>,
 ) -> Option<String> {
+    try_inline_with_sites(san_ll, targets, None)
+}
+
+fn try_inline_with_sites(
+    san_ll: &str,
+    targets: Option<(&HashSet<String>, &str, Option<&str>)>,
+    cursor_sites: Option<&HashSet<(String, String)>>,
+) -> Option<String> {
     let items = parse_items(san_ll)?;
 
     // Collect the internal-function table: name -> (signature, body). Only `define internal`.
@@ -808,6 +811,8 @@ fn try_inline(
             let sig = parse_def_header(&f.header)?;
             if sig.internal
                 && targets.is_none_or(|(targets, _selected, _entry)| targets.contains(&sig.name))
+                && cursor_sites
+                    .is_none_or(|sites| sites.iter().any(|(callee, _)| callee == &sig.name))
             {
                 // Every param must name a value for us to substitute; reject varargs/unnamed.
                 if sig.params.iter().any(|p| p.is_empty()) {
@@ -869,7 +874,13 @@ fn try_inline(
                 let new_body = if targets.is_some() && selected_pointer.is_none() {
                     f.body
                 } else {
-                    inline_body_to_fixpoint(f.body, &internal, &mut counter, selected_pointer)?
+                    inline_body_to_fixpoint(
+                        f.body,
+                        &internal,
+                        &mut counter,
+                        selected_pointer,
+                        cursor_sites,
+                    )?
                 };
                 out_items.push(Item::Func(FuncBlock {
                     header: f.header,
@@ -1086,15 +1097,22 @@ fn inline_body_to_fixpoint(
     internal: &HashMap<String, (DefSig, Vec<String>)>,
     counter: &mut usize,
     selected_pointer: Option<&str>,
+    cursor_sites: Option<&HashSet<(String, String)>>,
 ) -> Option<Vec<String>> {
     // A generous bound to guarantee termination even if something pathological slips past the cycle
     // check; acyclic transitive inlining is finite, this only guards against bugs.
     let mut budget = 100_000usize;
     loop {
-        let Some(idx) = find_inlinable_call(&body, internal, selected_pointer) else {
+        let Some(idx) = find_inlinable_call(&body, internal, selected_pointer, cursor_sites) else {
             return Some(body);
         };
-        body = inline_one(body, idx, internal, counter, selected_pointer.is_some())?;
+        body = inline_one(
+            body,
+            idx,
+            internal,
+            counter,
+            selected_pointer.is_some() || cursor_sites.is_some(),
+        )?;
         budget -= 1;
         if budget == 0 {
             return None;
@@ -1107,12 +1125,18 @@ fn find_inlinable_call(
     body: &[String],
     internal: &HashMap<String, (DefSig, Vec<String>)>,
     selected_pointer: Option<&str>,
+    cursor_sites: Option<&HashSet<(String, String)>>,
 ) -> Option<usize> {
     for (i, line) in body.iter().enumerate() {
         if let Some(c) = parse_call(line) {
             if internal.contains_key(&c.callee)
                 && selected_pointer
                     .is_none_or(|selected| c.args.iter().any(|argument| argument == selected))
+                && cursor_sites.is_none_or(|sites| {
+                    c.args
+                        .iter()
+                        .any(|argument| sites.contains(&(c.callee.clone(), argument.clone())))
+                })
             {
                 return Some(i);
             }
@@ -1586,6 +1610,35 @@ fn is_phi_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_batch_rewrites_only_selected_callee_argument_pairs() {
+        let source = r#"
+define internal void @write(ptr addrspace(1) %p, i32 %v) {
+entry:
+  store i32 %v, ptr addrspace(1) %p
+  ret void
+}
+define void @k(ptr addrspace(1) %a, ptr addrspace(1) %b, ptr addrspace(1) %keep) {
+entry:
+  call void @write(ptr addrspace(1) %a, i32 1)
+  call void @write(ptr addrspace(1) %b, i32 2)
+  call void @write(ptr addrspace(1) %keep, i32 3)
+  ret void
+}
+"#;
+        let sites = HashSet::from([
+            ("write".to_string(), "%a".to_string()),
+            ("write".to_string(), "%b".to_string()),
+        ]);
+        let rewritten = inline_cursor_call_sites(source, &sites).unwrap();
+        let calls = rewritten.lines().filter_map(parse_call).collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].callee, "@write");
+        assert_eq!(calls[0].args[0], "%keep");
+        assert!(rewritten.contains("store i32 1, ptr addrspace(1) %a"));
+        assert!(rewritten.contains("store i32 2, ptr addrspace(1) %b"));
+    }
 
     #[test]
     fn repeated_inlining_starts_after_existing_namespace() {
